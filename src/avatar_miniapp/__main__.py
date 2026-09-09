@@ -111,7 +111,9 @@ def main(argv: list[str] | None = None) -> int:
     # Конкурентность единица и здесь, и у инстанса: он падает по памяти,
     # если гнать задачи подряд. Очередь на всех, а не по задаче на человека.
     jobs = JobManager(settings.jobs_dir, runner, concurrency=1)
-    inbox = Inbox(settings.inbox_dir, ffprobe=settings.ffmpeg.replace("ffmpeg", "ffprobe"))
+    inbox = Inbox(settings.inbox_dir,
+                  ffprobe=settings.ffmpeg.replace("ffmpeg", "ffprobe"),
+                  ffmpeg=settings.ffmpeg)
     inbox.sweep()
     app = build_app(settings, jobs, lambda: load_voices(settings), inbox)
 

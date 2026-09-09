@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Аватар</title>
-<link rel="stylesheet" href="/static/style.css?v=4">
+<link rel="stylesheet" href="/static/style.css?v=5">
 <!-- Мост MAX. Именно он создаёт window.WebApp, откуда берётся подписанный
      initData. Без этой строки страница открывается, но подписи у неё нет,
      и сервер честно отвечает 401 на каждый запрос. Грузим синхронно и до
@@ -62,15 +62,18 @@
       <!-- Микрофон вебвью MAX странице не отдаёт: getUserMedia падает
            с NotAllowedError ещё до вопроса о разрешении. Зато сам
            мессенджер записывает голосовые прекрасно — ими и пользуемся. -->
-      <p class="hint">Запись голоса — через бота: окну MAX микрофон не даёт.</p>
+      <p class="hint">Запись — через бота: окну MAX микрофон не даёт.
+        Голосовые до бота не доходят, поэтому запишите короткий ролик —
+        голос я возьму из него.</p>
       <div id="voice-slot" class="slot" hidden>
         <span class="slot-text"></span>
         <button class="slot-x" data-drop="voice" title="удалить запись">×</button>
       </div>
       <button class="wide" id="voice-record">Записать голос</button>
       <div id="voice-armed" class="statusline" hidden>
-        Жду вашу запись. Нажмите «назад» — окно закроется, и запишите боту
-        голосовое, секунд на пять. Как приму, пришлю кнопку обратно сюда.
+        Жду вашу запись. Нажмите «назад» — окно закроется. Снимите боту
+        короткий ролик, секунд на пять, где вы говорите. Я возьму оттуда
+        голос и напишу в чат.
       </div>
     </div>
     <div class="tabbody" data-voice-body="file">
@@ -133,6 +136,6 @@
   <video id="wait-video" controls playsinline hidden></video>
 </section>
 
-<script src="/static/app.js?v=4"></script>
+<script src="/static/app.js?v=5"></script>
 </body>
 </html>

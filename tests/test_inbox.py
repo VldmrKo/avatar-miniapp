@@ -167,3 +167,25 @@ def test_sniff_gives_up_quietly_on_garbage(tmp_path):
     """Пустая строка значит «не знаю» — вызывающий решит сам."""
     box = Inbox(tmp_path / "box")
     assert box.sniff(b"not a media file at all", "") == ""
+
+
+def test_audio_from_video(tmp_path):
+    """Голосовые до бота не доезжают, а видео доезжает — берём звук оттуда."""
+    box = Inbox(tmp_path / "box")
+    clip = _make(tmp_path, "c.mp4", [
+        "-f", "lavfi", "-i", "testsrc=s=160x120:d=4",
+        "-f", "lavfi", "-i", "sine=f=300:d=4",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+    ])
+    sound = box.audio_from(clip, ".mp4")
+    assert sound[:4] == b"RIFF"
+    assert box.sniff(sound, ".wav") == VOICE
+
+
+def test_audio_from_silent_video_is_empty(tmp_path):
+    box = Inbox(tmp_path / "box")
+    mute = _make(tmp_path, "s.mp4", [
+        "-f", "lavfi", "-i", "testsrc=s=160x120:d=3",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+    ])
+    assert box.audio_from(mute, ".mp4") == b""

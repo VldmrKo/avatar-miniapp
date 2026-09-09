@@ -53,9 +53,38 @@ class Item:
 
 
 class Inbox:
-    def __init__(self, root: Path, ffprobe: str = "ffprobe") -> None:
+    def __init__(self, root: Path, ffprobe: str = "ffprobe", ffmpeg: str = "ffmpeg") -> None:
         self.root = root
         self.ffprobe = ffprobe
+        self.ffmpeg = ffmpeg
+
+    def audio_from(self, data: bytes, suffix: str) -> bytes:
+        """Звуковая дорожка из видео.
+
+        Нужна потому, что голосовые до бота не доезжают: MAX присылает по ним
+        пустое событие без тела. А видео доезжает целиком. Значит «записать
+        голос» — это записать короткий ролик, а звук мы возьмём сами.
+        """
+        import subprocess
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=suffix or ".mp4", delete=False) as fh:
+            fh.write(data)
+            src = Path(fh.name)
+        dst = src.with_suffix(".wav")
+        try:
+            proc = subprocess.run(
+                [self.ffmpeg, "-nostdin", "-y", "-v", "error", "-i", str(src),
+                 "-vn", "-ac", "1", "-ar", "24000", str(dst)],
+                capture_output=True, text=True, stdin=subprocess.DEVNULL,
+            )
+            if proc.returncode != 0 or not dst.is_file():
+                log.error("не вынули звук: %s", (proc.stderr or "").strip()[:300])
+                return b""
+            return dst.read_bytes()
+        finally:
+            src.unlink(missing_ok=True)
+            dst.unlink(missing_ok=True)
 
     def _dir(self, user_id: int) -> Path:
         return self.root / str(user_id)

@@ -38,11 +38,11 @@ GOT_PHOTO = (
 )
 GOT_VOICE = (
     "Голос принят — {seconds:.0f} с.\n"
-    "Откройте приложение, он уже выбран во вкладке «записать в чате»."
+    "Вернитесь в приложение: он уже выбран во вкладке «Свой голос»."
 )
 GOT_VIDEO = (
     "Видео принято — {seconds:.0f} с.\n"
-    "Откройте приложение и выберите «Аватар по видео»."
+    "Вернитесь в приложение и нажмите «Сделать аватара»."
 )
 TOO_SHORT_VOICE = (
     "Запись короче двух секунд — модель такую не примет.\n"
@@ -107,6 +107,9 @@ class ChatSide:
         self.webapp_url = webapp_url
         self.inbox = inbox
         self.username = ""
+        # Какой вариант написания адреса MAX принял. Пустая строка — ещё
+        # не знаем или ни один не подошёл.
+        self._good_url = ""
         self._task: asyncio.Task | None = None
         self._register()
 
@@ -230,6 +233,15 @@ class ChatSide:
                 want = self.inbox.sniff(data, suffix_of(url, "")) or expected or VOICE
             suffix = suffix_of(url, ".mp4" if want == VIDEO else ".ogg")
 
+            # Голосовые до бота не доезжают — MAX присылает по ним пустое
+            # событие без тела. Зато видео доезжает. Поэтому если человек
+            # шёл записывать голос, а прислал ролик — берём звук оттуда.
+            if want == VIDEO and expected == VOICE:
+                sound = self.inbox.audio_from(data, suffix)
+                if sound:
+                    data, want, suffix = sound, VOICE, ".wav"
+                    log.info("ждали голос, пришло видео — взяли звуковую дорожку")
+
             try:
                 item = self.inbox.put(user_id, want, data, suffix)
             except ValueError as exc:
@@ -275,9 +287,27 @@ class ChatSide:
         await self._send(chat_id, text, open_app)
 
     async def _send(self, chat_id: int, text: str, open_app: str = "") -> None:
+        """Сообщение, при возможности с кнопкой возврата в приложение.
+
+        Кнопка приятна, но не обязательна: если MAX её не принял, человек
+        всё равно должен получить текст. Молчание тут хуже некрасивого.
+        """
+        if open_app:
+            urls = [self._good_url] if self._good_url else self._app_urls()
+            for url in dict.fromkeys(urls):
+                try:
+                    await self.bot.send_message(
+                        chat_id=chat_id, text=text,
+                        attachments=self._open_app(open_app, url))
+                    self._good_url = url
+                    return
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("кнопка с адресом %s не принята: %s", url, exc)
+            self._good_url = ""
+            log.error("ни один вариант адреса не подошёл — шлём без кнопки. "
+                      "Сверьте MAX_WEBAPP_URL с адресом в business.max.ru/self")
         try:
-            await self.bot.send_message(chat_id=chat_id, text=text,
-                                        attachments=self._open_app(open_app))
+            await self.bot.send_message(chat_id=chat_id, text=text)
         except Exception as exc:  # noqa: BLE001 — упавший мессенджер не должен ронять бота
             log.error("не отправилось в %s: %s", chat_id, exc)
 
@@ -292,16 +322,24 @@ class ChatSide:
         return [Attachment(type=AttachmentType.INLINE_KEYBOARD,
                            payload=ButtonsPayload(buttons=[list(buttons)]))]
 
-    def _open_app(self, screen: str) -> list | None:
-        """Кнопка «вернуться в приложение» на нужный экран.
+    def _app_urls(self) -> list[str]:
+        """Варианты написания адреса мини-аппа.
 
-        web_app заполняется ВСЕГДА, даже когда указан payload: сервер MAX
-        иначе отвечает «Field webApp cannot be null» на этапе отправки.
+        MAX ищет кнопку по точному совпадению с тем, что привязано в кабинете,
+        и на расхождение в одном слэше отвечает
+        «Link not found with pk = LinkPK{name=...}». Какой вариант записан —
+        снаружи не видно, поэтому пробуем оба и запоминаем сработавший.
         """
-        if not screen or not self.webapp_url:
+        if not self.webapp_url:
+            return []
+        base = self.webapp_url.rstrip("/")
+        return [self.webapp_url, base + "/", base]
+
+    def _open_app(self, screen: str, url: str) -> list | None:
+        if not screen or not url:
             return None
         return self.keyboard(OpenAppButton(text="Открыть приложение",
-                                           web_app=self.webapp_url, payload=screen))
+                                           web_app=url, payload=screen))
 
     async def deliver(self, user_id: int, video: Path, caption: str, feedback_key: str) -> None:
         """Результат — в личку по user_id из проверенной подписи.
