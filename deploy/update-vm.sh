@@ -19,8 +19,10 @@ PORT=8081
 
 if [ -d "$APP/.git" ]; then
 	echo "=== git pull"
-	git -C "$APP" pull --ff-only
-	[ -d "$CORE/.git" ] && git -C "$CORE" pull --ff-only
+	# Тянем от владельца каталога, а не от root: иначе git ругается
+	# на «dubious ownership» и отказывается работать с чужим репозиторием.
+	sudo -u avatar git -C "$APP" pull --ff-only
+	[ -d "$CORE/.git" ] && sudo -u avatar git -C "$CORE" pull --ff-only
 elif [ -d "$SRC/miniapp" ]; then
 	echo "=== копирую из $SRC"
 	cp -r "$SRC/miniapp/." "$APP/"

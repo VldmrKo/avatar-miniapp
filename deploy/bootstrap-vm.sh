@@ -98,7 +98,9 @@ clone_into() {
 	url=$1
 	dest=$2
 	if [ -d "$dest/.git" ]; then
-		git -C "$dest" pull --ff-only
+		# От владельца каталога: root на чужом репозитории получает
+		# «dubious ownership» и не делает ничего.
+		sudo -u avatar git -C "$dest" pull --ff-only
 		return
 	fi
 	command -v git >/dev/null || apt-get install -y -qq git
