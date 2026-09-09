@@ -177,16 +177,44 @@ async def test_transient_failure_is_retried(tmp_path, h3, media):
 
 
 async def test_uploads_are_removed_after_success(tmp_path, h3, media):
-    """Чужое лицо и чужой голос не должны лежать дольше необходимого."""
+    """Загруженное через окно не должно лежать дольше необходимого."""
+    import shutil
+
     photo, voice = media
     settings = make_settings(tmp_path, h3.url)
+    uploads = settings.data_dir / "uploads"
+    uploads.mkdir(parents=True, exist_ok=True)
+    up_photo = uploads / photo.name
+    up_voice = uploads / voice.name
+    shutil.copy(photo, up_photo)
+    shutil.copy(voice, up_voice)
+
     await generate.make_runner(settings)(Job(
         job_id="j5", user_id=7, mode="photo", text="Привет!",
-        inputs={"photo": str(photo), "voice": str(voice)},
+        inputs={"photo": str(up_photo), "voice": str(up_voice)},
     ))
-    assert not photo.exists()
-    assert not voice.exists()
+    assert not up_photo.exists()
+    assert not up_voice.exists()
     assert not (settings.data_dir / "work" / "j5").exists()
+
+
+async def test_voice_sent_to_chat_survives_generation(tmp_path, h3, media):
+    """Голосовое человек прислал один раз и вправе сделать по нему
+    несколько роликов. Удаляем только загруженное через окно."""
+    import shutil
+
+    photo, voice = media
+    settings = make_settings(tmp_path, h3.url)
+    kept = settings.inbox_dir / "7"
+    kept.mkdir(parents=True, exist_ok=True)
+    kept_voice = kept / "voice.wav"
+    shutil.copy(voice, kept_voice)
+
+    await generate.make_runner(settings)(Job(
+        job_id="j8", user_id=7, mode="photo", text="Привет!",
+        inputs={"photo": str(photo), "voice": str(kept_voice)},
+    ))
+    assert kept_voice.exists()
 
 
 async def test_broken_input_explains_itself(tmp_path, h3, media):

@@ -19,6 +19,7 @@ from aiohttp import web
 from . import config, generate
 from .api import build_app
 from .chat import ChatSide
+from .inbox import Inbox
 from .jobs import DONE, Job, JobManager
 
 log = logging.getLogger("miniapp")
@@ -112,11 +113,13 @@ def main(argv: list[str] | None = None) -> int:
     # Конкурентность единица и здесь, и у инстанса: он падает по памяти,
     # если гнать задачи подряд. Очередь на всех, а не по задаче на человека.
     jobs = JobManager(settings.jobs_dir, runner, concurrency=1)
-    app = build_app(settings, jobs, load_voices(settings))
+    inbox = Inbox(settings.inbox_dir, ffprobe=settings.ffmpeg.replace("ffmpeg", "ffprobe"))
+    inbox.sweep()
+    app = build_app(settings, jobs, load_voices(settings), inbox)
 
     chat: ChatSide | None = None
     if settings.chat_enabled:
-        chat = ChatSide(settings.bot_token, settings.webapp_url)
+        chat = ChatSide(settings.bot_token, settings.webapp_url, inbox)
         app["chat"] = chat
 
     async def deliver(job: Job) -> None:

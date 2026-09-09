@@ -145,21 +145,26 @@ def make_runner(settings: Settings):
         job.media_name = out.name
         job.progress = 100
         log.info("%s: готово, %.1f МБ", job.job_id, out.stat().st_size / 1_048_576)
-        _cleanup(work, job)
+        _cleanup(work, job, settings.data_dir / "uploads")
 
     return run
 
 
-def _cleanup(work: Path, job: Job) -> None:
+def _cleanup(work: Path, job: Job, uploads: Path) -> None:
     """Промежуточные файлы не нужны, а место на диске конечно.
 
-    Загруженное пользователем удаляем тоже: это чужое лицо и чужой голос,
-    держать их дольше необходимого незачем.
+    Загруженное через окно удаляем: это чужое лицо и чужой голос, держать
+    их дольше необходимого незачем. А вот присланное боту в чат не трогаем —
+    человек прислал голосовое один раз и вправе сделать по нему несколько
+    роликов. Оно само истечёт через сутки.
     """
     import shutil
 
     shutil.rmtree(work, ignore_errors=True)
     for key in ("photo", "voice", "video"):
         raw = job.inputs.get(key)
-        if raw:
-            Path(raw).unlink(missing_ok=True)
+        if not raw:
+            continue
+        path = Path(raw)
+        if path.parent == uploads:
+            path.unlink(missing_ok=True)

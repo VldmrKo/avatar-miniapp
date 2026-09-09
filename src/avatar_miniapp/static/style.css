@@ -47,6 +47,14 @@ textarea{width:100%;font:inherit;padding:11px;border:1px solid var(--line);
 .tabbody{display:none}
 .tabbody.on{display:block}
 
+.steps{margin:0 0 10px}
+.steps p{margin:0 0 5px;font-size:14px;color:var(--muted)}
+.steps b{color:var(--ink)}
+.statusline{font-size:13px;color:var(--muted);padding:9px 11px;border-radius:10px;
+            background:var(--soft);border:1px solid var(--line)}
+.statusline.ready{color:var(--accent);border-color:var(--accent)}
+.filebtn{display:block;text-align:center;margin-bottom:8px;cursor:pointer}
+
 .chips{display:flex;gap:8px;flex-wrap:wrap}
 .chip{padding:9px 13px;border:1px solid var(--line);border-radius:12px;
       background:var(--soft);color:inherit;font:inherit;text-align:left;cursor:pointer}

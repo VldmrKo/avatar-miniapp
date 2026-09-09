@@ -55,7 +55,10 @@ async def make_client(settings: Settings, runner) -> tuple[TestClient, JobManage
         jobs.mark_delivered(job)
 
     jobs.set_delivery(deliver)
-    app = build_app(settings, jobs, [{"id": "anya", "title": "Аня", "note": ""}])
+    from avatar_miniapp.inbox import Inbox
+
+    app = build_app(settings, jobs, [{"id": "anya", "title": "Аня", "note": ""}],
+                    Inbox(settings.inbox_dir))
     app.on_startup.append(lambda _: jobs.start())
     app.on_cleanup.append(lambda _: jobs.stop())
     client = TestClient(TestServer(app))

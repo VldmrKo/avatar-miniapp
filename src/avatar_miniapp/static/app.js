@@ -13,7 +13,9 @@
 
   var WA = window.WebApp || null;
   var INIT = WA && WA.initData ? WA.initData : "";
-  var voice = { mode: "preset", id: "", blob: null };
+  var voice = { mode: "preset", id: "" };
+  var inbox = { voice: null, video: null };
+  var pickedVideo = null;
   var poll = null;
   var screen = "boot";
 
@@ -99,12 +101,20 @@
         for (var k = 0; k < bodies.length; k++) {
           bodies[k].classList.toggle("on", bodies[k].getAttribute("data-voice-body") === name);
         }
+        // Человек мог записать голосовое, не закрывая окно, и вернуться
+        // сюда переключением вкладки — перечитываем состояние.
+        if (name === "chat") refreshInbox();
       });
     }
 
     api("/api/voices").then(function (r) {
       var box = document.getElementById("voice-list");
       box.innerHTML = "";
+      if (!r.voices.length) {
+        box.innerHTML = '<div class="hint">Готовых голосов пока нет — '
+                      + 'запишите свой или загрузите файл.</div>';
+        return;
+      }
       r.voices.forEach(function (v, n) {
         var b = document.createElement("button");
         b.className = "chip" + (n === 0 ? " on" : "");
@@ -119,40 +129,63 @@
         box.appendChild(b);
       });
     });
+  }
 
-    // Запись показываем только если она в этом вебвью вообще возможна.
-    var canRecord = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia
-                       && window.MediaRecorder);
-    if (canRecord) document.querySelector('[data-voice-tab="record"]').hidden = false;
-    else return;
-
-    var btn = document.getElementById("rec-btn");
-    var state = document.getElementById("rec-state");
-    btn.addEventListener("click", function () {
-      btn.disabled = true;
-      navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
-        var chunks = [];
-        var rec = new MediaRecorder(stream);
-        rec.ondataavailable = function (e) { chunks.push(e.data); };
-        rec.onstop = function () {
-          stream.getTracks().forEach(function (t) { t.stop(); });
-          voice.blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
-          state.textContent = "Записано. Можно перезаписать.";
-          btn.disabled = false;
-        };
-        rec.start();
-        var left = 5;
-        state.textContent = "Говорите… 5";
-        var tick = setInterval(function () {
-          left -= 1;
-          state.textContent = "Говорите… " + left;
-          if (left <= 0) { clearInterval(tick); rec.stop(); }
-        }, 1000);
-      }).catch(function (e) {
-        state.textContent = "Микрофон недоступен: " + e.name;
-        btn.disabled = false;
+  function wireVideoPickers() {
+    ["video-capture", "video-file"].forEach(function (id) {
+      var input = document.getElementById(id);
+      input.addEventListener("change", function () {
+        pickedVideo = input.files[0] || null;
+        // Выбор в одном поле отменяет другой, иначе непонятно, что уйдёт.
+        var other = document.getElementById(id === "video-file" ? "video-capture" : "video-file");
+        if (other) other.value = "";
+        showVideoState();
       });
     });
+  }
+
+  // --- что уже прислано боту в чат -------------------------------------------
+  // Окну MAX не даёт ни микрофон, ни камеру в режиме видео. Записывает сам
+  // мессенджер, а окно показывает, что принято.
+
+  function ago(seconds) {
+    if (seconds < 60) return "только что";
+    var minutes = Math.round(seconds / 60);
+    if (minutes < 60) return minutes + " мин назад";
+    return Math.round(minutes / 60) + " ч назад";
+  }
+
+  function refreshInbox() {
+    api("/api/state").then(function (state) {
+      inbox = state.inbox || { voice: null, video: null };
+      showInbox();
+    }).catch(function () {});
+  }
+
+  function showInbox() {
+    var line = document.getElementById("voice-chat-state");
+    if (inbox.voice) {
+      line.className = "statusline ready";
+      line.textContent = "Голос принят: " + inbox.voice.seconds + " с, " + ago(inbox.voice.age_s);
+    } else {
+      line.className = "statusline";
+      line.textContent = "Голосового пока нет.";
+    }
+    showVideoState();
+  }
+
+  function showVideoState() {
+    var line = document.getElementById("video-picked");
+    if (pickedVideo) {
+      line.className = "statusline ready";
+      line.textContent = "Выбрано: " + pickedVideo.name;
+    } else if (inbox.video) {
+      line.className = "statusline ready";
+      line.textContent = "Из чата: " + inbox.video.seconds + " с, " + ago(inbox.video.age_s);
+    } else {
+      line.className = "statusline";
+      line.textContent = "Видео пока нет.";
+    }
   }
 
   // --- отправка -------------------------------------------------------------
@@ -169,19 +202,25 @@
       if (!photo) { err.textContent = "Нужно фото."; return; }
       fd.append("photo", photo);
       if (voice.mode === "preset") {
+        if (!voice.id) { err.textContent = "Выберите голос."; return; }
         fd.append("voice_id", voice.id);
-      } else if (voice.mode === "record") {
-        if (!voice.blob) { err.textContent = "Запишите голос или выберите готовый."; return; }
-        fd.append("voice", voice.blob, "voice.webm");
+      } else if (voice.mode === "chat") {
+        // Файл лежит на сервере — сюда ничего не кладём, там подхватят.
+        if (!inbox.voice) {
+          err.textContent = "Голосового ещё нет. Запишите его боту в чат.";
+          return;
+        }
       } else {
         var vf = document.getElementById("voice-file").files[0];
         if (!vf) { err.textContent = "Выберите файл с голосом."; return; }
         fd.append("voice", vf);
       }
-    } else {
-      var vid = document.getElementById("video-file").files[0];
-      if (!vid) { err.textContent = "Нужно видео."; return; }
-      fd.append("video", vid);
+    } else if (pickedVideo) {
+      fd.append("video", pickedVideo);
+    } else if (!inbox.video) {
+      err.textContent = "Нужно видео: снимите на камеру, выберите файл "
+                      + "или отправьте ролик боту в чат.";
+      return;
     }
 
     var btn = document.querySelector('[data-submit="' + mode + '"]');
@@ -246,7 +285,11 @@
   // --- старт ----------------------------------------------------------------
 
   document.querySelectorAll("[data-go]").forEach(function (b) {
-    b.addEventListener("click", function () { show(b.getAttribute("data-go")); });
+    b.addEventListener("click", function () {
+      var where = b.getAttribute("data-go");
+      show(where);
+      if (where === "video") refreshInbox();
+    });
   });
   document.querySelectorAll("[data-submit]").forEach(function (b) {
     b.addEventListener("click", function () { submit(b.getAttribute("data-submit")); });
@@ -254,8 +297,11 @@
   wireCounter("photo-text");
   wireCounter("video-text");
   wireVoice();
+  wireVideoPickers();
 
   api("/api/state").then(function (state) {
+    inbox = state.inbox || { voice: null, video: null };
+    showInbox();
     if (state.job) { resume(state.job); return; }
     show("pick");
   }).catch(function (e) {

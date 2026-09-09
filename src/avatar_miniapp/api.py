@@ -76,9 +76,13 @@ async def state(request: web.Request) -> web.Response:
     jobs: JobManager = request.app["jobs"]
     who = caller_of(request)
     job = jobs.active_of(who.user_id)
+    inbox = request.app["inbox"]
     return web.json_response({
         "name": who.display_name,
         "job": job.public(jobs.position_of(job)) if job else None,
+        # Что человек уже прислал боту в чат. Окно не умеет ни писать голос,
+        # ни снимать видео — этим занимается сам мессенджер.
+        "inbox": inbox.public(who.user_id) if inbox else {},
     })
 
 
@@ -100,6 +104,20 @@ async def create(request: web.Request) -> web.Response:
     mode, text, files = await _read_form(request)
     if mode not in ("photo", "video"):
         return web.json_response({"error": "неизвестный режим"}, status=400)
+
+    # Голос и видео могли приехать не через окно, а голосовым или роликом
+    # боту в чат — для MAX это единственный способ что-то записать.
+    inbox = request.app["inbox"]
+    if inbox:
+        if mode == "photo" and not files.get("voice") and not files.get("voice_id"):
+            item = inbox.get(who.user_id, "voice")
+            if item:
+                files["voice"] = str(item.path)
+        if mode == "video" and not files.get("video"):
+            item = inbox.get(who.user_id, "video")
+            if item:
+                files["video"] = str(item.path)
+                files["_from_inbox"] = "video"
     if not text.strip():
         return web.json_response({"error": "нужен текст реплики"}, status=400)
 
@@ -193,11 +211,13 @@ async def _read_form(request: web.Request) -> tuple[str, str, dict]:
     return mode, text, files
 
 
-def build_app(settings: Settings, jobs: JobManager, voices: list[dict]) -> web.Application:
+def build_app(settings: Settings, jobs: JobManager, voices: list[dict],
+              inbox=None) -> web.Application:
     app = web.Application(client_max_size=MAX_UPLOAD_MB * 1024 * 1024)
     app["settings"] = settings
     app["jobs"] = jobs
     app["voices"] = voices
+    app["inbox"] = inbox
     app.add_routes(routes)
     app.router.add_static("/static/", STATIC_DIR, name="static")
     app.router.add_static("/media/", settings.media_dir, name="media")
