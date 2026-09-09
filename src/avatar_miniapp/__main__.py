@@ -16,7 +16,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import config
+from . import config, generate
 from .api import build_app
 from .chat import ChatSide
 from .jobs import DONE, Job, JobManager
@@ -64,13 +64,31 @@ def make_stub_runner(media_dir: Path, seconds: float = 20.0):
     return run
 
 
-def load_voices() -> list[dict]:
-    """Готовые голоса. На первом шаге — заглушки, файлы подложим на шестом."""
-    return [
-        {"id": "anya", "title": "Аня", "note": "женский, спокойный"},
-        {"id": "sergey", "title": "Сергей", "note": "мужской, деловой"},
-        {"id": "andrey", "title": "Андрей", "note": "мужской, живой"},
-    ]
+def load_voices(settings) -> list[dict]:
+    """Готовые голоса — по факту наличия файлов в каталоге данных.
+
+    Подписи можно задать в voices.yaml рядом с ними; без него берём имя
+    файла. Так добавить голос — значит положить wav и перезапустить,
+    без правки кода.
+    """
+    import yaml
+
+    folder = settings.voices_dir
+    titles = {}
+    meta = folder / "voices.yaml"
+    if meta.is_file():
+        titles = yaml.safe_load(meta.read_text(encoding="utf-8")) or {}
+    voices = []
+    for wav in sorted(folder.glob("*.wav")):
+        info = titles.get(wav.stem) or {}
+        voices.append({
+            "id": wav.stem,
+            "title": info.get("title") or wav.stem.capitalize(),
+            "note": info.get("note", ""),
+        })
+    if not voices:
+        log.warning("в %s нет ни одного голоса — вкладка «готовый» будет пустой", folder)
+    return voices
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -85,8 +103,16 @@ def main(argv: list[str] | None = None) -> int:
     if settings.chat_enabled:
         log.info("токен:   %s", settings.token_hint)
 
-    jobs = JobManager(settings.jobs_dir, make_stub_runner(settings.media_dir), concurrency=1)
-    app = build_app(settings, jobs, load_voices())
+    if settings.use_stub:
+        log.warning("генерация на заглушке: настоящих роликов не будет")
+        runner = make_stub_runner(settings.media_dir)
+    else:
+        log.info("модель:  H3 на %s", settings.h3_base_url)
+        runner = generate.make_runner(settings)
+    # Конкурентность единица и здесь, и у инстанса: он падает по памяти,
+    # если гнать задачи подряд. Очередь на всех, а не по задаче на человека.
+    jobs = JobManager(settings.jobs_dir, runner, concurrency=1)
+    app = build_app(settings, jobs, load_voices(settings))
 
     chat: ChatSide | None = None
     if settings.chat_enabled:
@@ -110,7 +136,9 @@ def main(argv: list[str] | None = None) -> int:
                 feedback_key=job.job_id,
             )
         else:
-            await chat.say_failed(job.user_id)
+            # Отказ подготовки объясняет, что не так со входом, и это
+            # человеку полезнее общего «не получилось».
+            await chat.say_failed(job.user_id, job.user_message)
         jobs.mark_delivered(job)
 
     jobs.set_delivery(deliver)

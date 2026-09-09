@@ -158,6 +158,28 @@ curl -s -o /dev/null -w '%{http_code}\n' https://kandiavatar.duckdns.org/api/sta
 
 ---
 
+## 7a. Готовые голоса
+
+В репозиторий они не едут — это записи живых людей. Кладём прямо на сервер:
+
+```sh
+sudo -u avatar mkdir -p /var/lib/avatar-miniapp/voices
+# с рабочей машины, из C:\AvatarsData\refs\persons:
+#   scp person01/voice_canon_24k.wav vvkozlov@<IP>:/tmp/anya.wav
+sudo -u avatar cp /tmp/anya.wav /var/lib/avatar-miniapp/voices/anya.wav
+sudo -u avatar tee /var/lib/avatar-miniapp/voices/voices.yaml >/dev/null <<'EOF'
+anya:   {title: "Аня",    note: "женский, спокойный"}
+sergey: {title: "Сергей", note: "мужской, деловой"}
+andrey: {title: "Андрей", note: "мужской, живой"}
+EOF
+sudo systemctl restart avatar-miniapp
+```
+
+Без них вкладка «готовый голос» будет пустой, а в логе появится
+предупреждение. Запись своего голоса и загрузка файла работают и так.
+
+---
+
 ## 8. Сразу после этого — на локальной машине
 
 В `%USERPROFILE%\.avatars\secrets.env` поставить:

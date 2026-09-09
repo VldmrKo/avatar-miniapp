@@ -130,9 +130,10 @@ class ChatSide:
         except Exception as exc:  # noqa: BLE001
             log.warning("кнопка обратной связи не ушла: %s", exc)
 
-    async def say_failed(self, user_id: int) -> None:
+    async def say_failed(self, user_id: int, reason: str = "") -> None:
+        text = reason.strip() or FAILED
         try:
-            await self.bot.send_message(user_id=user_id, text=FAILED)
+            await self.bot.send_message(user_id=user_id, text=text)
         except Exception as exc:  # noqa: BLE001
             log.error("не отправилось про отказ: %s", exc)
 

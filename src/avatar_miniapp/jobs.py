@@ -30,6 +30,8 @@ DONE = "done"
 FAILED = "failed"
 ACTIVE = (QUEUED, RUNNING)
 
+DEFAULT_FAIL = "Не получилось сделать ролик. Попробуйте ещё раз через пару минут."
+
 
 @dataclass
 class Job:
@@ -45,7 +47,8 @@ class Job:
     provider_job_id: str = ""
     inputs: dict = field(default_factory=dict)   # пути к подготовленным файлам
     media_name: str = ""                          # имя результата в media_dir
-    error: str = ""
+    error: str = ""          # техническое, в лог и в файл задачи
+    user_message: str = ""   # то, что не стыдно показать человеку
     delivered: bool = False
 
     def public(self, position: int | None = None) -> dict:
@@ -56,11 +59,20 @@ class Job:
             "progress": self.progress,
             "waited_s": round((self.finished_at or time.time()) - self.created_at),
             "media_url": f"/media/{self.media_name}" if self.media_name else None,
-            "error": self.error,
+            "error": self.user_message or ("" if self.status != FAILED else DEFAULT_FAIL),
         }
         if position is not None:
             body["queue_position"] = position
         return body
+
+
+class UserError(Exception):
+    """Отказ, который можно показать человеку дословно.
+
+    Всё остальное наружу не идёт: в тексте обычного исключения бывает
+    трассировка чужого воркера, путь на диске или кусок ответа API —
+    человеку это ничего не объясняет, а нам лишнее в чате.
+    """
 
 
 class JobBusy(Exception):
@@ -212,7 +224,8 @@ class JobManager:
                 raise
             except Exception as exc:  # noqa: BLE001 — падение задачи не роняет воркер
                 job.status = FAILED
-                job.error = str(exc)
+                job.error = f"{type(exc).__name__}: {exc}"
+                job.user_message = str(exc) if isinstance(exc, UserError) else ""
                 log.error("%s: %s: %s", job.job_id, type(exc).__name__, exc)
                 log.debug("%s: полный след", job.job_id, exc_info=True)
             finally:

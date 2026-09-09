@@ -29,6 +29,13 @@ def _flag(values: dict[str, str], key: str, default: bool) -> bool:
 class Settings:
     bot_token: str = ""
     webapp_url: str = ""
+    h3_base_url: str = ""
+    h3_api_key: str = ""
+    ffmpeg: str = "ffmpeg"
+    # Заглушка вместо модели: весь путь окно ↔ чат отлаживается без единой
+    # потраченной генерации. Боевой режим включается сам, как только есть
+    # адрес и ключ H3.
+    use_stub: bool = False
     host: str = "127.0.0.1"
     port: int = 8081
     data_dir: Path = Path("./data")
@@ -44,6 +51,12 @@ class Settings:
     init_data_future_skew_s: int = 300
     secrets_path: str = ""
     warnings: list[str] = field(default_factory=list)
+
+    @property
+    def voices_dir(self) -> Path:
+        """Готовые голоса. НЕ в репозитории: это записи живых людей,
+        а avatar-miniapp публичный. Кладутся на сервер рядом с данными."""
+        return self.data_dir / "voices"
 
     @property
     def token_hint(self) -> str:
@@ -68,7 +81,7 @@ class Settings:
         return self.data_dir / "media"
 
     def ensure_dirs(self) -> None:
-        for path in (self.jobs_dir, self.media_dir):
+        for path in (self.jobs_dir, self.media_dir, self.voices_dir):
             path.mkdir(parents=True, exist_ok=True)
 
 
@@ -82,6 +95,10 @@ def load(env_file: str | os.PathLike[str] | None = None) -> Settings:
         # По умолчанию — рядом с проектом (в .gitignore). На сервере каталог
         # задаётся явно: юнит разрешает запись только в /var/lib/avatar-miniapp.
         data_dir=Path(values.get("MINIAPP_DATA_DIR") or (APP_DIR.parents[1] / "data")),
+        h3_base_url=values.get("H3_BASE_URL", ""),
+        h3_api_key=values.get("H3_API_KEY", ""),
+        ffmpeg=values.get("MINIAPP_FFMPEG", "ffmpeg"),
+        use_stub=_flag(values, "MINIAPP_USE_STUB", False),
         dev_allow_unsigned=_flag(values, "MINIAPP_DEV_ALLOW_UNSIGNED", False),
         chat_enabled=_flag(values, "MINIAPP_CHAT_ENABLED", True),
         secrets_path=values.get("_secrets_path", ""),
@@ -97,6 +114,12 @@ def load(env_file: str | os.PathLike[str] | None = None) -> Settings:
             "работает только веб-часть."
         )
         settings.chat_enabled = False
+    if not settings.use_stub and not (settings.h3_base_url and settings.h3_api_key):
+        settings.warnings.append(
+            "H3_BASE_URL или H3_API_KEY пусты — работаем на заглушке, "
+            "настоящих роликов не будет."
+        )
+        settings.use_stub = True
     # Токен, который «работает на ноутбуке и не работает на сервере», почти
     # всегда попорчен при переносе. Ловим это до первого запроса к MAX.
     token = settings.bot_token
