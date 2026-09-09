@@ -1,0 +1,21 @@
+# Добавить в /etc/caddy/Caddyfile отдельным блоком.
+# Существующий блок kandibot.duckdns.org не трогаем.
+#
+#   sudo caddy validate --config /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+
+kandiavatar.duckdns.org {
+	encode gzip
+
+	# Результаты отдаются как файлы: пусть кешируются, они неизменяемые.
+	handle /media/* {
+		header Cache-Control "public, max-age=604800"
+		reverse_proxy 127.0.0.1:8081
+	}
+
+	# Всё остальное — приложению. Заголовок кеша для index.html ставит
+	# само приложение: вебвью MAX иначе показывает прежнюю версию окна.
+	handle {
+		reverse_proxy 127.0.0.1:8081
+	}
+}

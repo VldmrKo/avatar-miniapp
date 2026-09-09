@@ -1,0 +1,34 @@
+# /etc/systemd/system/avatar-miniapp.service
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now avatar-miniapp
+#   journalctl -u avatar-miniapp -f
+
+[Unit]
+Description=Avatar mini app for MAX
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=avatar
+Group=avatar
+WorkingDirectory=/opt/avatar-miniapp
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/avatar-miniapp/src
+# Секреты живут здесь и создаются НА СЕРВЕРЕ. Локальный .env не копируем:
+# в нём флаг отладки, который открывает наши генерации всем желающим.
+EnvironmentFile=/opt/avatar-miniapp/.env
+ExecStart=/opt/avatar-miniapp/.venv/bin/python -m avatar_miniapp
+Restart=always
+RestartSec=5
+
+# Соседний бот на этой же машине не должен пострадать, если нас распухнет.
+MemoryMax=700M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/avatar-miniapp
+
+[Install]
+WantedBy=multi-user.target

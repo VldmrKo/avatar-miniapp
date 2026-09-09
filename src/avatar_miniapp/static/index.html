@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Аватар</title>
+<link rel="stylesheet" href="/static/style.css?v=1">
+</head>
+<body>
+
+<div id="boot" class="screen on"><div class="spin"></div></div>
+
+<!-- выбор режима -->
+<section id="pick" class="screen">
+  <h1>Аватар</h1>
+  <p class="lead">Сделаю говорящего аватара по вашему фото или видео.</p>
+
+  <button class="card" data-go="photo">
+    <span class="ico">🖼️</span>
+    <span class="body"><b>Аватар по фото</b><small>фото, голос и текст</small></span>
+  </button>
+
+  <button class="card" data-go="video">
+    <span class="ico">🎬</span>
+    <span class="body"><b>Аватар по видео</b><small>видео и текст, голос возьму из видео</small></span>
+  </button>
+
+  <button class="card soon" disabled>
+    <span class="ico">🧑‍🎤</span>
+    <span class="body"><b>Выбрать персонажа</b><small>готовые образы</small></span>
+    <span class="badge">скоро</span>
+  </button>
+</section>
+
+<!-- аватар по фото -->
+<section id="photo" class="screen">
+  <h2>Аватар по фото</h2>
+
+  <label class="field">
+    <span class="label">Фото лица</span>
+    <input type="file" id="photo-file" accept="image/png,image/jpeg">
+  </label>
+
+  <div class="field">
+    <span class="label">Голос</span>
+    <div class="tabs" id="voice-tabs">
+      <button class="tab" data-voice-tab="record" hidden>Записать</button>
+      <button class="tab on" data-voice-tab="preset">Готовый</button>
+      <button class="tab" data-voice-tab="file">Файл</button>
+    </div>
+
+    <div class="tabbody" data-voice-body="record">
+      <button id="rec-btn" class="wide">Записать 5 секунд</button>
+      <div id="rec-state" class="hint"></div>
+    </div>
+    <div class="tabbody on" data-voice-body="preset">
+      <div id="voice-list" class="chips"></div>
+    </div>
+    <div class="tabbody" data-voice-body="file">
+      <input type="file" id="voice-file" accept="audio/*">
+      <div class="hint">2–15 секунд чистой речи, без музыки.</div>
+    </div>
+  </div>
+
+  <label class="field">
+    <span class="label">Что сказать</span>
+    <textarea id="photo-text" rows="4" placeholder="Привет! Я ваш аватар."></textarea>
+    <div class="counter" data-counter="photo-text">&nbsp;</div>
+  </label>
+
+  <button class="go" data-submit="photo">Сделать аватара</button>
+  <div class="err" data-err="photo"></div>
+</section>
+
+<!-- аватар по видео -->
+<section id="video" class="screen">
+  <h2>Аватар по видео</h2>
+
+  <label class="field">
+    <span class="label">Видео</span>
+    <input type="file" id="video-file" accept="video/*">
+    <div class="hint">Возьму отрезок с речью до 15 секунд и голос оттуда же.</div>
+  </label>
+
+  <label class="field">
+    <span class="label">Что сказать</span>
+    <textarea id="video-text" rows="4" placeholder="Привет! Я ваш аватар."></textarea>
+    <div class="counter" data-counter="video-text">&nbsp;</div>
+  </label>
+
+  <button class="go" data-submit="video">Сделать аватара</button>
+  <div class="err" data-err="video"></div>
+</section>
+
+<!-- ожидание -->
+<section id="wait" class="screen">
+  <div class="spin big"></div>
+  <h2 id="wait-title">Делаю аватара</h2>
+  <div class="bar"><i id="wait-bar"></i></div>
+  <div id="wait-note" class="lead"></div>
+  <p class="calm">
+    Окно можно закрыть — результат придёт в чат.<br>
+    Если оставите открытым, покажу здесь.
+  </p>
+  <video id="wait-video" controls playsinline hidden></video>
+</section>
+
+<script src="/static/app.js?v=1"></script>
+</body>
+</html>
