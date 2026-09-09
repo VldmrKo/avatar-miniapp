@@ -16,8 +16,12 @@
   var voice = { mode: "preset", id: "" };
   var inbox = { voice: null, video: null };
   var pickedVideo = null;
+  // Бот прикладывает к ответу кнопку с payload — по ней открываем
+  // сразу тот экран, с которого человек уходил записывать.
+  var startAt = (WA && WA.initDataUnsafe && WA.initDataUnsafe.start_param) || "";
   var poll = null;
   var screen = "boot";
+  var armedScreen = false;
 
   // --- сеть -----------------------------------------------------------------
 
@@ -46,7 +50,7 @@
     if (el) el.classList.add("on");
 
     if (!WA || !WA.BackButton) return;
-    if (name === "photo" || name === "video") {
+    if (!armedScreen && (name === "photo" || name === "video")) {
       WA.BackButton.show();
     } else {
       // На pick и на ожидании кнопку отдаём системе: там она закрывает окно.
@@ -58,7 +62,9 @@
     WA.BackButton.onClick(function () {
       // Событие на части платформ прилетает и при скрытой кнопке,
       // поэтому смотрим текущий экран, а не доверяем видимости.
-      if (screen === "photo" || screen === "video") show("pick");
+      // Пока ждём запись, «назад» должен закрывать окно, а не уводить
+      // на выбор режима: человек как раз идёт в чат записывать.
+      if (!armedScreen && (screen === "photo" || screen === "video")) show("pick");
     });
   }
 
@@ -131,19 +137,6 @@
     });
   }
 
-  function wireVideoPickers() {
-    ["video-capture", "video-file"].forEach(function (id) {
-      var input = document.getElementById(id);
-      input.addEventListener("change", function () {
-        pickedVideo = input.files[0] || null;
-        // Выбор в одном поле отменяет другой, иначе непонятно, что уйдёт.
-        var other = document.getElementById(id === "video-file" ? "video-capture" : "video-file");
-        if (other) other.value = "";
-        showVideoState();
-      });
-    });
-  }
-
   // --- что уже прислано боту в чат -------------------------------------------
   // Окну MAX не даёт ни микрофон, ни камеру в режиме видео. Записывает сам
   // мессенджер, а окно показывает, что принято.
@@ -162,29 +155,82 @@
     }).catch(function () {});
   }
 
+  function arm(kind) {
+    return api("/api/inbox/expect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: kind })
+    }).then(function () {
+      document.getElementById(kind === "voice" ? "voice-armed" : "video-armed").hidden = false;
+      document.getElementById(kind === "voice" ? "voice-record" : "video-record").hidden = true;
+      // Отпускаем «назад» системе: закрыть окно программно в API MAX нечем,
+      // а незанятую кнопку мессенджер обрабатывает сам и окно закрывает.
+      if (WA && WA.BackButton) WA.BackButton.hide();
+      armedScreen = true;
+    }).catch(function (e) {
+      document.getElementById(kind === "voice" ? "voice-armed" : "video-armed").textContent =
+        "Не получилось: " + e.message;
+    });
+  }
+
+  function drop(kind) {
+    return api("/api/inbox/" + kind, { method: "DELETE" }).then(function () {
+      inbox[kind] = null;
+      showInbox();
+    }).catch(function () {});
+  }
+
+  function wireInboxButtons() {
+    document.getElementById("voice-record").addEventListener("click", function () {
+      arm("voice");
+    });
+    document.getElementById("video-record").addEventListener("click", function () {
+      arm("video");
+    });
+    document.querySelectorAll("[data-drop]").forEach(function (b) {
+      b.addEventListener("click", function () { drop(b.getAttribute("data-drop")); });
+    });
+    var input = document.getElementById("video-file");
+    input.addEventListener("change", function () {
+      pickedVideo = input.files[0] || null;
+      showVideoState();
+    });
+  }
+
   function showInbox() {
-    var line = document.getElementById("voice-chat-state");
+    var slot = document.getElementById("voice-slot");
+    var text = slot.querySelector(".slot-text");
     if (inbox.voice) {
-      line.className = "statusline ready";
-      line.textContent = "Голос принят: " + inbox.voice.seconds + " с, " + ago(inbox.voice.age_s);
+      slot.hidden = false;
+      text.textContent = "Ваш голос: " + inbox.voice.seconds + " с, " + ago(inbox.voice.age_s);
+      document.getElementById("voice-record").textContent = "Записать заново";
+      document.getElementById("voice-record").hidden = false;
+      document.getElementById("voice-armed").hidden = true;
     } else {
-      line.className = "statusline";
-      line.textContent = "Голосового пока нет.";
+      slot.hidden = true;
+      document.getElementById("voice-record").textContent = "Записать голос";
     }
     showVideoState();
   }
 
   function showVideoState() {
-    var line = document.getElementById("video-picked");
+    var slot = document.getElementById("video-slot");
+    var text = slot.querySelector(".slot-text");
+    var x = slot.querySelector(".slot-x");
     if (pickedVideo) {
-      line.className = "statusline ready";
-      line.textContent = "Выбрано: " + pickedVideo.name;
+      slot.hidden = false;
+      text.textContent = "Выбрано: " + pickedVideo.name;
+      x.hidden = false;
     } else if (inbox.video) {
-      line.className = "statusline ready";
-      line.textContent = "Из чата: " + inbox.video.seconds + " с, " + ago(inbox.video.age_s);
+      slot.hidden = false;
+      text.textContent = "Ваше видео: " + inbox.video.seconds + " с, " + ago(inbox.video.age_s);
+      x.hidden = false;
+      document.getElementById("video-record").textContent = "Записать заново";
+      document.getElementById("video-record").hidden = false;
+      document.getElementById("video-armed").hidden = true;
     } else {
-      line.className = "statusline";
-      line.textContent = "Видео пока нет.";
+      slot.hidden = true;
+      document.getElementById("video-record").textContent = "Записать видео";
     }
   }
 
@@ -297,12 +343,21 @@
   wireCounter("photo-text");
   wireCounter("video-text");
   wireVoice();
-  wireVideoPickers();
+  wireInboxButtons();
 
   api("/api/state").then(function (state) {
     inbox = state.inbox || { voice: null, video: null };
+    armedScreen = false;
     showInbox();
     if (state.job) { resume(state.job); return; }
+    if (startAt === "photo" || startAt === "video") {
+      show(startAt);
+      if (startAt === "photo") {
+        var tab = document.querySelector('[data-voice-tab="chat"]');
+        if (tab) tab.click();
+      }
+      return;
+    }
     show("pick");
   }).catch(function (e) {
     // Разделяем случаи: мост MAX не загрузился, подписи в окне нет, подпись

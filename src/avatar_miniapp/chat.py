@@ -17,7 +17,8 @@ import aiohttp
 from maxapi import Bot, Dispatcher
 from maxapi.enums import UploadType
 from maxapi.filters import F
-from maxapi.types import BotStarted, CallbackButton, InputMediaBuffer, MessageCallback, MessageCreated
+from maxapi.types import (BotStarted, CallbackButton, InputMediaBuffer, MessageCallback,
+                          MessageCreated, OpenAppButton)
 
 from .inbox import VIDEO, VOICE, Inbox
 
@@ -143,33 +144,70 @@ class ChatSide:
 
     # --- приём вложений ---------------------------------------------------
 
+    def _describe(self, attachment) -> tuple[str, str]:
+        """Тип и ссылка вложения, максимально терпимо к форме объекта.
+
+        maxapi отдаёт разные payload-классы, а голосовое MAX может назвать
+        и audio, и file. Поэтому смотрим и объект, и словарь, и логируем
+        то, что реально пришло: догадки тут дороже одной строки в журнале.
+        """
+        if isinstance(attachment, dict):
+            kind = str(attachment.get("type") or "")
+            payload = attachment.get("payload") or {}
+            url = payload.get("url") if isinstance(payload, dict) else ""
+        else:
+            raw = getattr(attachment, "type", "")
+            kind = str(getattr(raw, "value", raw) or "")
+            payload = getattr(attachment, "payload", None)
+            url = getattr(payload, "url", "") or ""
+            if not url and hasattr(payload, "model_dump"):
+                url = (payload.model_dump() or {}).get("url", "") or ""
+        return kind.lower(), url or ""
+
     async def _take_attachments(self, event: MessageCreated, attachments: list) -> None:
         """Голосовое и видео из чата — это наша запись с камеры и микрофона.
 
         Окну MAX ни микрофон, ни камеру в режиме видео не отдаёт, а себе —
         отдаёт. Поэтому пишет человек привычной кнопкой в переписке, а мы
-        просто забираем файл по ссылке из вложения.
+        забираем файл по ссылке из вложения.
         """
         user_id = user_id_of(event)
+        for attachment in attachments:
+            kind, url = self._describe(attachment)
+            # Пока платформа молодая, состав вложений стоит видеть целиком:
+            # один раз это уже спасло от гадания, чем MAX шлёт голосовое.
+            log.info("вложение: тип=%s, ссылка=%s", kind or "?", (url or "нет")[:120])
+
         if self.inbox is None or user_id is None:
-            await self._say(event, GOT_PHOTO)
+            log.warning("вложение некуда положить: inbox=%s, user_id=%s",
+                        bool(self.inbox), user_id)
+            await self._say(event, NUDGE)
             return
 
+        expected = self.inbox.expected(user_id)
         for attachment in attachments:
-            kind = str(getattr(getattr(attachment, "type", ""), "value", "") or
-                       getattr(attachment, "type", ""))
-            url = getattr(getattr(attachment, "payload", None), "url", None)
+            kind, url = self._describe(attachment)
             if kind == "image":
                 await self._say(event, GOT_PHOTO)
                 return
             if kind not in ("audio", "video", "file") or not url:
                 continue
 
-            want = VIDEO if kind == "video" else VOICE
-            suffix = suffix_of(url, ".mp4" if want is VIDEO else ".ogg")
-            if kind == "file":
-                # Файлом присылают что угодно; разбираем по расширению.
-                want = VIDEO if suffix in (".mp4", ".mov", ".m4v", ".webm") else VOICE
+            if kind == "video":
+                want = VIDEO
+            elif kind == "audio":
+                want = VOICE
+            else:
+                # Файлом присылают что угодно — разбираем по расширению,
+                # а при сомнении верим тому, чего мы ждали из окна.
+                ext = suffix_of(url, "")
+                if ext in (".mp4", ".mov", ".m4v", ".webm", ".3gp"):
+                    want = VIDEO
+                elif ext in (".ogg", ".oga", ".m4a", ".mp3", ".wav", ".opus", ".aac"):
+                    want = VOICE
+                else:
+                    want = expected or VOICE
+            suffix = suffix_of(url, ".mp4" if want == VIDEO else ".ogg")
 
             data = await self._download(url)
             if data is None:
@@ -184,12 +222,16 @@ class ChatSide:
 
             if item.seconds and item.seconds < 2.0:
                 self.inbox.clear(user_id, want)
-                await self._say(event, TOO_SHORT_VIDEO if want is VIDEO else TOO_SHORT_VOICE)
+                await self._say(event, TOO_SHORT_VIDEO if want == VIDEO else TOO_SHORT_VOICE)
                 return
-            template = GOT_VIDEO if want is VIDEO else GOT_VOICE
-            await self._say(event, template.format(seconds=item.seconds))
+
+            self.inbox.disarm(user_id)
+            template = GOT_VIDEO if want == VIDEO else GOT_VOICE
+            await self._say(event, template.format(seconds=item.seconds),
+                            open_app="video" if want == VIDEO else "photo")
             return
 
+        # Дошли сюда — вложение есть, но не то, что мы умеем брать.
         await self._say(event, NUDGE)
 
     async def _download(self, url: str) -> bytes | None:
@@ -207,15 +249,27 @@ class ChatSide:
 
     # --- отправка ---------------------------------------------------------
 
-    async def _say(self, event, text: str) -> None:
+    async def _say(self, event, text: str, open_app: str = "") -> None:
         chat_id = chat_id_of(event)
         if chat_id is None:
             log.warning("не нашли, куда отвечать: %s", type(event).__name__)
             return
         try:
-            await self.bot.send_message(chat_id=chat_id, text=text)
+            await self.bot.send_message(chat_id=chat_id, text=text,
+                                        attachments=self._open_app(open_app))
         except Exception as exc:  # noqa: BLE001 — упавший мессенджер не должен ронять бота
             log.error("не отправилось в %s: %s", chat_id, exc)
+
+    def _open_app(self, screen: str) -> list | None:
+        """Кнопка «вернуться в приложение» на нужный экран.
+
+        web_app заполняется ВСЕГДА, даже когда указан payload: сервер MAX
+        иначе отвечает «Field webApp cannot be null» на этапе отправки.
+        """
+        if not screen or not self.webapp_url:
+            return None
+        return [[OpenAppButton(text="Открыть приложение",
+                               web_app=self.webapp_url, payload=screen)]]
 
     async def deliver(self, user_id: int, video: Path, caption: str, feedback_key: str) -> None:
         """Результат — в личку по user_id из проверенной подписи.

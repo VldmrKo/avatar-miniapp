@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Аватар</title>
-<link rel="stylesheet" href="/static/style.css?v=3">
+<link rel="stylesheet" href="/static/style.css?v=4">
 <!-- Мост MAX. Именно он создаёт window.WebApp, откуда берётся подписанный
      initData. Без этой строки страница открывается, но подписи у неё нет,
      и сервер честно отвечает 401 на каждый запрос. Грузим синхронно и до
@@ -62,12 +62,16 @@
       <!-- Микрофон вебвью MAX странице не отдаёт: getUserMedia падает
            с NotAllowedError ещё до вопроса о разрешении. Зато сам
            мессенджер записывает голосовые прекрасно — ими и пользуемся. -->
-      <div class="steps">
-        <p><b>1.</b> Закройте это окно кнопкой «назад».</p>
-        <p><b>2.</b> Запишите боту голосовое — секунд на пять, любую фразу.</p>
-        <p><b>3.</b> Вернитесь сюда, голос уже будет здесь.</p>
+      <p class="hint">Запись голоса — через бота: окну MAX микрофон не даёт.</p>
+      <div id="voice-slot" class="slot" hidden>
+        <span class="slot-text"></span>
+        <button class="slot-x" data-drop="voice" title="удалить запись">×</button>
       </div>
-      <div id="voice-chat-state" class="statusline">Голосового пока нет.</div>
+      <button class="wide" id="voice-record">Записать голос</button>
+      <div id="voice-armed" class="statusline" hidden>
+        Жду вашу запись. Нажмите «назад» — окно закроется, и запишите боту
+        голосовое, секунд на пять. Как приму, пришлю кнопку обратно сюда.
+      </div>
     </div>
     <div class="tabbody" data-voice-body="file">
       <input type="file" id="voice-file" accept="audio/*">
@@ -91,20 +95,19 @@
 
   <div class="field">
     <span class="label">Видео</span>
-    <!-- capture просит систему открыть камеру сразу в режиме видео.
-         Обычный выбор файла в MAX открывает камеру только для фото. -->
-    <label class="wide filebtn">Снять на камеру
-      <input type="file" id="video-capture" accept="video/*" capture="user" hidden>
-    </label>
+    <div id="video-slot" class="slot" hidden>
+      <span class="slot-text"></span>
+      <button class="slot-x" data-drop="video" title="удалить видео">×</button>
+    </div>
+    <button class="wide" id="video-record">Записать видео</button>
+    <div id="video-armed" class="statusline" hidden>
+      Жду ваше видео. Нажмите «назад» — окно закроется, снимите ролик
+      и отправьте его боту. Как приму, пришлю кнопку обратно сюда.
+    </div>
     <label class="wide filebtn">Выбрать готовое видео
       <input type="file" id="video-file" accept="video/*" hidden>
     </label>
-    <div id="video-picked" class="statusline">Видео пока нет.</div>
-    <div class="hint">
-      Если камера не открывается в режиме видео — снимите обычной камерой
-      телефона и отправьте ролик боту в чат, я его подхвачу. Возьму отрезок
-      с речью до 15 секунд и голос оттуда же.
-    </div>
+    <div class="hint">Возьму отрезок с речью до 15 секунд и голос оттуда же.</div>
   </div>
 
   <label class="field">
@@ -130,6 +133,6 @@
   <video id="wait-video" controls playsinline hidden></video>
 </section>
 
-<script src="/static/app.js?v=3"></script>
+<script src="/static/app.js?v=4"></script>
 </body>
 </html>

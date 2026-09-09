@@ -87,8 +87,6 @@ def load_voices(settings) -> list[dict]:
             "title": info.get("title") or wav.stem.capitalize(),
             "note": info.get("note", ""),
         })
-    if not voices:
-        log.warning("в %s нет ни одного голоса — вкладка «готовый» будет пустой", folder)
     return voices
 
 
@@ -115,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     jobs = JobManager(settings.jobs_dir, runner, concurrency=1)
     inbox = Inbox(settings.inbox_dir, ffprobe=settings.ffmpeg.replace("ffmpeg", "ffprobe"))
     inbox.sweep()
-    app = build_app(settings, jobs, load_voices(settings), inbox)
+    app = build_app(settings, jobs, lambda: load_voices(settings), inbox)
 
     chat: ChatSide | None = None
     if settings.chat_enabled:

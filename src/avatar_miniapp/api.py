@@ -88,7 +88,37 @@ async def state(request: web.Request) -> web.Response:
 
 @routes.get("/api/voices")
 async def voices(request: web.Request) -> web.Response:
-    return web.json_response({"voices": request.app["voices"]})
+    """Читаем каталог на каждый запрос.
+
+    Добавить голос должно значить «положить wav и всё». Перезапуск ради
+    новой строки в списке — ровно та мелочь, из-за которой потом полчаса
+    ищут, почему файл лежит, а в окне пусто.
+    """
+    return web.json_response({"voices": request.app["read_voices"]()})
+
+
+@routes.post("/api/inbox/expect")
+async def expect(request: web.Request) -> web.Response:
+    """Окно сообщает боту, что сейчас придёт запись."""
+    who = caller_of(request)
+    inbox = request.app["inbox"]
+    body = await request.json()
+    kind = str(body.get("kind") or "")
+    if kind not in ("voice", "video") or not inbox:
+        return web.json_response({"error": "неизвестный вид записи"}, status=400)
+    inbox.arm(who.user_id, kind)
+    return web.json_response({"ok": True})
+
+
+@routes.delete("/api/inbox/{kind}")
+async def drop(request: web.Request) -> web.Response:
+    who = caller_of(request)
+    inbox = request.app["inbox"]
+    kind = request.match_info["kind"]
+    if kind not in ("voice", "video") or not inbox:
+        return web.json_response({"error": "неизвестный вид записи"}, status=400)
+    inbox.clear(who.user_id, kind)
+    return web.json_response({"ok": True})
 
 
 @routes.post("/api/avatar")
@@ -211,12 +241,12 @@ async def _read_form(request: web.Request) -> tuple[str, str, dict]:
     return mode, text, files
 
 
-def build_app(settings: Settings, jobs: JobManager, voices: list[dict],
-              inbox=None) -> web.Application:
+def build_app(settings: Settings, jobs: JobManager, read_voices, inbox=None) -> web.Application:
     app = web.Application(client_max_size=MAX_UPLOAD_MB * 1024 * 1024)
     app["settings"] = settings
     app["jobs"] = jobs
-    app["voices"] = voices
+    # Функция, а не список: каталог с голосами читается на каждый запрос.
+    app["read_voices"] = read_voices if callable(read_voices) else (lambda: read_voices)
     app["inbox"] = inbox
     app.add_routes(routes)
     app.router.add_static("/static/", STATIC_DIR, name="static")

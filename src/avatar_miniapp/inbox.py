@@ -116,6 +116,35 @@ class Inbox:
             return None
         return item
 
+    # --- «жду запись» -----------------------------------------------------
+    # Окно говорит боту, чего ждать. Это нужно ровно в одном месте: когда
+    # человек прислал файл без расширения и по нему не понять, голос это
+    # или видео. Плюс делает ответ бота осмысленным, а не общим.
+
+    def arm(self, user_id: int, kind: str) -> None:
+        if kind not in KINDS:
+            raise ValueError(f"неизвестный вид: {kind}")
+        meta = self._meta(user_id)
+        meta["expect"] = {"kind": kind, "at": time.time()}
+        self._dir(user_id).mkdir(parents=True, exist_ok=True)
+        self._meta_path(user_id).write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    def expected(self, user_id: int) -> str:
+        entry = self._meta(user_id).get("expect") or {}
+        # Полчаса — столько живёт намерение. Дальше это уже другая история.
+        if entry and time.time() - float(entry.get("at", 0)) < 1800:
+            return str(entry.get("kind") or "")
+        return ""
+
+    def disarm(self, user_id: int) -> None:
+        meta = self._meta(user_id)
+        if meta.pop("expect", None) is not None:
+            self._meta_path(user_id).write_text(
+                json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
     def clear(self, user_id: int, kind: str) -> None:
         meta = self._meta(user_id)
         entry = meta.pop(kind, None)
@@ -126,7 +155,7 @@ class Inbox:
             )
 
     def public(self, user_id: int) -> dict:
-        out = {}
+        out: dict = {"expect": self.expected(user_id)}
         for kind in KINDS:
             item = self.get(user_id, kind)
             out[kind] = item.public() if item else None
