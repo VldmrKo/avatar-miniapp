@@ -82,6 +82,8 @@ def main(argv: list[str] | None = None) -> int:
         log.warning("%s", warning)
     log.info("секреты: %s", settings.secrets_path)
     log.info("данные:  %s", settings.data_dir)
+    if settings.chat_enabled:
+        log.info("токен:   %s", settings.token_hint)
 
     jobs = JobManager(settings.jobs_dir, make_stub_runner(settings.media_dir), concurrency=1)
     app = build_app(settings, jobs, load_voices())

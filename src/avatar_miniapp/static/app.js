@@ -259,7 +259,25 @@
     if (state.job) { resume(state.job); return; }
     show("pick");
   }).catch(function (e) {
+    // Разделяем случаи: мост MAX не загрузился, подписи в окне нет, подпись
+    // не принята сервером. Лечатся они по-разному, и без этой развилки на
+    // три разные поломки видно одинаковое «не удалось».
+    var why;
+    if (!WA) {
+      why = "Мост MAX не загрузился — подпись брать неоткуда. "
+          + "Вне MAX это нормально, внутри — проверьте, что страница отдала max-web-app.js.";
+    } else if (!INIT) {
+      why = "MAX не передал подпись этому окну.";
+    } else if (e.status === 401) {
+      why = "MAX не принял подпись. Обычно это значит, что адрес приложения привязан "
+          + "к другому боту, чем тот, чьим токеном она проверяется.";
+    } else {
+      why = e.message;
+    }
     document.getElementById("boot").innerHTML =
-      '<p class="err">Не удалось начать: ' + e.message + "</p>";
+      '<p class="err">' + why + "</p>"
+      + '<button class="wide" id="boot-retry">Повторить</button>';
+    var retry = document.getElementById("boot-retry");
+    if (retry) retry.addEventListener("click", function () { location.reload(); });
   });
 })();

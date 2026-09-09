@@ -146,6 +146,12 @@ class ChatSide:
         except Exception as exc:  # noqa: BLE001
             # Без имени нельзя собрать deep link, но отвечать бот уже может.
             log.warning("get_me не ответил: %s", exc)
+            if "токен" in str(exc).lower() or "token" in str(exc).lower():
+                log.error(
+                    "MAX не принял токен — бот отвечать не будет. Сверьте длину и края "
+                    "значения MAX_BOT_TOKEN с рабочей машиной (в логе выше строка «токен»): "
+                    "чаще всего оно обрезано при копировании или осталось заполнителем."
+                )
         self._task = asyncio.create_task(self.dp.start_polling(self.bot), name="max-polling")
 
     async def stop(self) -> None:

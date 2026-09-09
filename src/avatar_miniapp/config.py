@@ -46,6 +46,20 @@ class Settings:
     warnings: list[str] = field(default_factory=list)
 
     @property
+    def token_hint(self) -> str:
+        """Опознавательные приметы токена для лога — без самого токена.
+
+        «Неверный токен» на одной машине при рабочем токене на другой — это
+        почти всегда обрезка или лишний символ. Длина и края отвечают на это
+        сразу, а сравнить их с локальными безопасно даже в переписке.
+        """
+        token = self.bot_token
+        if not token:
+            return "пусто"
+        edges = f"{token[:4]}…{token[-4:]}" if len(token) > 12 else "короткий"
+        return f"{len(token)} симв., {edges}"
+
+    @property
     def jobs_dir(self) -> Path:
         return self.data_dir / "jobs"
 
@@ -83,4 +97,17 @@ def load(env_file: str | os.PathLike[str] | None = None) -> Settings:
             "работает только веб-часть."
         )
         settings.chat_enabled = False
+    # Токен, который «работает на ноутбуке и не работает на сервере», почти
+    # всегда попорчен при переносе. Ловим это до первого запроса к MAX.
+    token = settings.bot_token
+    if token and not token.isascii():
+        settings.warnings.append(
+            "В MAX_BOT_TOKEN есть не-ASCII символы — похоже, вместо токена "
+            "подставился текст-заполнитель или значение скопировалось с лишним."
+        )
+    if token and any(ch.isspace() for ch in token):
+        settings.warnings.append(
+            "В MAX_BOT_TOKEN есть пробельные символы внутри значения — "
+            "скорее всего, токен склеился с чем-то при копировании."
+        )
     return settings

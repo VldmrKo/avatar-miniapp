@@ -4,7 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Аватар</title>
-<link rel="stylesheet" href="/static/style.css?v=1">
+<link rel="stylesheet" href="/static/style.css?v=2">
+<!-- Мост MAX. Именно он создаёт window.WebApp, откуда берётся подписанный
+     initData. Без этой строки страница открывается, но подписи у неё нет,
+     и сервер честно отвечает 401 на каждый запрос. Грузим синхронно и до
+     app.js: тот первым делом спрашивает /api/state. Вне MAX скрипт просто
+     не отдастся, и это нормально — локально работаем без подписи. -->
+<script src="https://st.max.ru/js/max-web-app.js"></script>
 </head>
 <body>
 
@@ -105,6 +111,6 @@
   <video id="wait-video" controls playsinline hidden></video>
 </section>
 
-<script src="/static/app.js?v=1"></script>
+<script src="/static/app.js?v=2"></script>
 </body>
 </html>
