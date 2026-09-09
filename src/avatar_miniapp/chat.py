@@ -19,7 +19,8 @@ from maxapi.enums import UploadType
 from maxapi.filters import F
 from maxapi.enums import AttachmentType
 from maxapi.types import (Attachment, BotStarted, ButtonsPayload, CallbackButton,
-                          InputMediaBuffer, MessageCallback, MessageCreated, OpenAppButton)
+                          InputMediaBuffer, LinkButton, MessageCallback, MessageCreated,
+                          OpenAppButton)
 
 from . import maxcompat
 from .inbox import VIDEO, VOICE, Inbox
@@ -107,9 +108,9 @@ class ChatSide:
         self.webapp_url = webapp_url
         self.inbox = inbox
         self.username = ""
-        # Какой вариант написания адреса MAX принял. Пустая строка — ещё
-        # не знаем или ни один не подошёл.
-        self._good_url = ""
+        # Какой способ вернуть человека в приложение MAX принял. Пустая
+        # строка — ещё не пробовали или ни один не подошёл.
+        self._good_way = ""
         self._task: asyncio.Task | None = None
         self._register()
 
@@ -293,19 +294,24 @@ class ChatSide:
         всё равно должен получить текст. Молчание тут хуже некрасивого.
         """
         if open_app:
-            urls = [self._good_url] if self._good_url else self._app_urls()
-            for url in dict.fromkeys(urls):
+            ways = self._ways_back(open_app)
+            # Как только какой-то способ сработал — держимся за него: перебор
+            # стоит по неудачному запросу к API на каждое сообщение.
+            if self._good_way:
+                ways = [w for w in ways if w[0] == self._good_way] or ways
+            for name, attachments in ways:
                 try:
-                    await self.bot.send_message(
-                        chat_id=chat_id, text=text,
-                        attachments=self._open_app(open_app, url))
-                    self._good_url = url
+                    await self.bot.send_message(chat_id=chat_id, text=text,
+                                                attachments=attachments)
+                    if self._good_way != name:
+                        log.info("кнопка возврата: работает вариант «%s»", name)
+                    self._good_way = name
                     return
                 except Exception as exc:  # noqa: BLE001
-                    log.warning("кнопка с адресом %s не принята: %s", url, exc)
-            self._good_url = ""
-            log.error("ни один вариант адреса не подошёл — шлём без кнопки. "
-                      "Сверьте MAX_WEBAPP_URL с адресом в business.max.ru/self")
+                    log.warning("вариант «%s» не принят: %s", name, exc)
+            self._good_way = ""
+            log.error("ни один способ вернуть в приложение не сработал — шлём без кнопки. "
+                      "Проверьте адрес в business.max.ru/self и MAX_WEBAPP_URL")
         try:
             await self.bot.send_message(chat_id=chat_id, text=text)
         except Exception as exc:  # noqa: BLE001 — упавший мессенджер не должен ронять бота
@@ -322,24 +328,29 @@ class ChatSide:
         return [Attachment(type=AttachmentType.INLINE_KEYBOARD,
                            payload=ButtonsPayload(buttons=[list(buttons)]))]
 
-    def _app_urls(self) -> list[str]:
-        """Варианты написания адреса мини-аппа.
+    def _ways_back(self, screen: str) -> list[tuple[str, list]]:
+        """Чем вернуть человека в приложение, от лучшего к работающему.
 
-        MAX ищет кнопку по точному совпадению с тем, что привязано в кабинете,
-        и на расхождение в одном слэше отвечает
-        «Link not found with pk = LinkPK{name=...}». Какой вариант записан —
-        снаружи не видно, поэтому пробуем оба и запоминаем сработавший.
+        OpenAppButton открывает окно прямо в мессенджере, но MAX ищет адрес
+        в своём реестре по точному совпадению и на расхождение отвечает
+        «Link not found with pk = LinkPK{name=...}». Что именно там записано,
+        снаружи не видно.
+
+        Поэтому в запасе глубокая ссылка `max.ru/<бот>?startapp=<экран>` —
+        обычная ссылка, никакого реестра, а payload приезжает в окно тем же
+        start_param. Работает всегда, просто выглядит как ссылка, а не кнопка.
         """
-        if not self.webapp_url:
-            return []
-        base = self.webapp_url.rstrip("/")
-        return [self.webapp_url, base + "/", base]
-
-    def _open_app(self, screen: str, url: str) -> list | None:
-        if not screen or not url:
-            return None
-        return self.keyboard(OpenAppButton(text="Открыть приложение",
-                                           web_app=url, payload=screen))
+        ways: list[tuple[str, list]] = []
+        if self.webapp_url:
+            base = self.webapp_url.rstrip("/")
+            for url in dict.fromkeys([self.webapp_url, base + "/", base]):
+                ways.append((f"приложение {url}", self.keyboard(
+                    OpenAppButton(text="Открыть приложение", web_app=url, payload=screen))))
+        if self.username:
+            link = f"https://max.ru/{self.username}?startapp={screen}"
+            ways.append((f"ссылка {link}", self.keyboard(
+                LinkButton(text="Открыть приложение", url=link))))
+        return ways
 
     async def deliver(self, user_id: int, video: Path, caption: str, feedback_key: str) -> None:
         """Результат — в личку по user_id из проверенной подписи.

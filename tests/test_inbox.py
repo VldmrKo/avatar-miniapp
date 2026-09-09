@@ -189,3 +189,38 @@ def test_audio_from_silent_video_is_empty(tmp_path):
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
     ])
     assert box.audio_from(mute, ".mp4") == b""
+
+
+# --- чем вернуть человека в приложение ---------------------------------------
+
+def _chat(webapp="https://kandiavatar.duckdns.org", username="se14180200_bot"):
+    from avatar_miniapp.chat import ChatSide
+
+    chat = ChatSide.__new__(ChatSide)
+    chat.webapp_url = webapp
+    chat.username = username
+    chat._good_way = ""
+    return chat
+
+
+def test_deep_link_is_the_last_resort():
+    """MAX может не найти адрес в реестре — тогда остаётся обычная ссылка."""
+    ways = _chat()._ways_back("photo")
+    names = [name for name, _ in ways]
+    assert any("приложение" in n for n in names)
+    assert names[-1].startswith("ссылка https://max.ru/se14180200_bot?startapp=photo")
+
+
+def test_without_username_only_the_app_button():
+    ways = _chat(username="")._ways_back("video")
+    assert all("ссылка" not in name for name, _ in ways)
+
+
+def test_without_anything_there_is_no_button():
+    assert _chat(webapp="", username="")._ways_back("photo") == []
+
+
+def test_slash_variants_are_not_duplicated():
+    ways = _chat(webapp="https://x/")._ways_back("photo")
+    urls = [n for n, _ in ways if n.startswith("приложение")]
+    assert len(urls) == len(set(urls))

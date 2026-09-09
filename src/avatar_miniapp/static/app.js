@@ -161,12 +161,15 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ kind: kind })
     }).then(function () {
-      document.getElementById(kind === "voice" ? "voice-armed" : "video-armed").hidden = false;
-      document.getElementById(kind === "voice" ? "voice-record" : "video-record").hidden = true;
       // Отпускаем «назад» системе: закрыть окно программно в API MAX нечем,
       // а незанятую кнопку мессенджер обрабатывает сам и окно закрывает.
       if (WA && WA.BackButton) WA.BackButton.hide();
       armedScreen = true;
+      // Запись просят перезаписать — старую с экрана убираем сразу,
+      // иначе непонятно, ждём мы новую или уже нет.
+      inbox[kind] = null;
+      if (kind === "video") { pickedVideo = null; }
+      showInbox();
     }).catch(function (e) {
       document.getElementById(kind === "voice" ? "voice-armed" : "video-armed").textContent =
         "Не получилось: " + e.message;
@@ -174,10 +177,21 @@
   }
 
   function drop(kind) {
+    // Крестик должен убирать запись целиком: и с сервера, и с экрана.
+    // Раньше ошибка молча съедалась, и человек видел, что ничего не изменилось.
     return api("/api/inbox/" + kind, { method: "DELETE" }).then(function () {
       inbox[kind] = null;
+      if (kind === "video") {
+        pickedVideo = null;
+        document.getElementById("video-file").value = "";
+      }
+      armedScreen = false;
       showInbox();
-    }).catch(function () {});
+    }).catch(function (e) {
+      var line = document.getElementById(kind === "voice" ? "voice-armed" : "video-armed");
+      line.hidden = false;
+      line.textContent = "Не удалось удалить: " + e.message;
+    });
   }
 
   function wireInboxButtons() {
@@ -197,41 +211,42 @@
     });
   }
 
+  // Оба блока показываются одинаково, поэтому и рисуются одной функцией:
+  // раньше они разошлись, и в одном я забыл вернуть кнопку и спрятать
+  // строку ожидания. Ровно такие несимметричности и вылезают на экране.
+  function paintSlot(prefix, filled, caption, idleLabel, againLabel) {
+    var slot = document.getElementById(prefix + "-slot");
+    var record = document.getElementById(prefix + "-record");
+    var armedLine = document.getElementById(prefix + "-armed");
+
+    slot.hidden = !filled;
+    if (filled) slot.querySelector(".slot-text").textContent = caption;
+
+    // Строка «жду запись» имеет смысл, только пока мы правда ждём.
+    var waiting = armedScreen && !filled;
+    armedLine.hidden = !waiting;
+    record.hidden = waiting;
+    record.textContent = filled ? againLabel : idleLabel;
+  }
+
   function showInbox() {
-    var slot = document.getElementById("voice-slot");
-    var text = slot.querySelector(".slot-text");
-    if (inbox.voice) {
-      slot.hidden = false;
-      text.textContent = "Ваш голос: " + inbox.voice.seconds + " с, " + ago(inbox.voice.age_s);
-      document.getElementById("voice-record").textContent = "Записать заново";
-      document.getElementById("voice-record").hidden = false;
-      document.getElementById("voice-armed").hidden = true;
-    } else {
-      slot.hidden = true;
-      document.getElementById("voice-record").textContent = "Записать голос";
-    }
+    paintSlot(
+      "voice",
+      !!inbox.voice,
+      inbox.voice ? "Ваш голос: " + inbox.voice.seconds + " с, " + ago(inbox.voice.age_s) : "",
+      "Записать голос",
+      "Записать заново"
+    );
     showVideoState();
   }
 
   function showVideoState() {
-    var slot = document.getElementById("video-slot");
-    var text = slot.querySelector(".slot-text");
-    var x = slot.querySelector(".slot-x");
-    if (pickedVideo) {
-      slot.hidden = false;
-      text.textContent = "Выбрано: " + pickedVideo.name;
-      x.hidden = false;
-    } else if (inbox.video) {
-      slot.hidden = false;
-      text.textContent = "Ваше видео: " + inbox.video.seconds + " с, " + ago(inbox.video.age_s);
-      x.hidden = false;
-      document.getElementById("video-record").textContent = "Записать заново";
-      document.getElementById("video-record").hidden = false;
-      document.getElementById("video-armed").hidden = true;
-    } else {
-      slot.hidden = true;
-      document.getElementById("video-record").textContent = "Записать видео";
+    var caption = "";
+    if (pickedVideo) caption = "Выбрано: " + pickedVideo.name;
+    else if (inbox.video) {
+      caption = "Ваше видео: " + inbox.video.seconds + " с, " + ago(inbox.video.age_s);
     }
+    paintSlot("video", !!caption, caption, "Записать видео", "Записать заново");
   }
 
   // --- отправка -------------------------------------------------------------

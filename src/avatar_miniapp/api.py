@@ -106,6 +106,10 @@ async def expect(request: web.Request) -> web.Response:
     kind = str(body.get("kind") or "")
     if kind not in ("voice", "video") or not inbox:
         return web.json_response({"error": "неизвестный вид записи"}, status=400)
+    # «Записать заново» значит именно заново: старую запись убираем сразу.
+    # Иначе человек передумает записывать, нажмёт «Сделать аватара» и молча
+    # получит ролик по прошлому голосу.
+    inbox.clear(who.user_id, kind)
     inbox.arm(who.user_id, kind)
     return web.json_response({"ok": True})
 
