@@ -137,3 +137,33 @@ def test_public_shape(tmp_path):
     assert body["video"] is None
     assert body["voice"]["name"] == "voice.ogg"
     assert "expect" in body
+
+
+# --- опознание содержимого ---------------------------------------------------
+# MAX отдаёт и голосовое, и видео как `file` со ссылкой getfile?rq=... —
+# ни расширения, ни подсказки в типе. Гадали по имени и ошибались.
+
+def _make(tmp_path, name, args):
+    import subprocess
+
+    path = tmp_path / name
+    subprocess.run(["ffmpeg", "-y", "-nostdin", "-v", "error", *args, str(path)], check=True)
+    return path.read_bytes()
+
+
+def test_sniff_tells_voice_from_video(tmp_path):
+    box = Inbox(tmp_path / "box")
+    voice = _make(tmp_path, "v.ogg", ["-f", "lavfi", "-i", "sine=f=220:d=3", "-c:a", "libopus"])
+    clip = _make(tmp_path, "c.mp4", [
+        "-f", "lavfi", "-i", "testsrc=s=160x120:d=3",
+        "-f", "lavfi", "-i", "sine=f=300:d=3",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+    ])
+    assert box.sniff(voice, "") == VOICE
+    assert box.sniff(clip, "") == VIDEO
+
+
+def test_sniff_gives_up_quietly_on_garbage(tmp_path):
+    """Пустая строка значит «не знаю» — вызывающий решит сам."""
+    box = Inbox(tmp_path / "box")
+    assert box.sniff(b"not a media file at all", "") == ""

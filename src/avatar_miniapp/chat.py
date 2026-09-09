@@ -17,9 +17,11 @@ import aiohttp
 from maxapi import Bot, Dispatcher
 from maxapi.enums import UploadType
 from maxapi.filters import F
-from maxapi.types import (BotStarted, CallbackButton, InputMediaBuffer, MessageCallback,
-                          MessageCreated, OpenAppButton)
+from maxapi.enums import AttachmentType
+from maxapi.types import (Attachment, BotStarted, ButtonsPayload, CallbackButton,
+                          InputMediaBuffer, MessageCallback, MessageCreated, OpenAppButton)
 
+from . import maxcompat
 from .inbox import VIDEO, VOICE, Inbox
 
 log = logging.getLogger("miniapp.chat")
@@ -164,75 +166,91 @@ class ChatSide:
                 url = (payload.model_dump() or {}).get("url", "") or ""
         return kind.lower(), url or ""
 
+    async def take_raw(self, event: dict) -> None:
+        """Событие, которое maxapi не разобрал.
+
+        Голосовые приходят именно так, поэтому это не запасной путь,
+        а сейчас основной. Достаём то же самое руками из словаря.
+        """
+        if event.get("update_type") != "message_created":
+            return
+        message = event.get("message") or {}
+        body = message.get("body") or {}
+        attachments = body.get("attachments") or []
+        if not attachments:
+            return
+        user_id = (message.get("sender") or {}).get("user_id")
+        chat_id = (message.get("recipient") or {}).get("chat_id")
+        await self._intake(chat_id, user_id, attachments)
+
     async def _take_attachments(self, event: MessageCreated, attachments: list) -> None:
+        await self._intake(chat_id_of(event), user_id_of(event), attachments)
+
+    async def _intake(self, chat_id: int | None, user_id: int | None,
+                      attachments: list) -> None:
         """Голосовое и видео из чата — это наша запись с камеры и микрофона.
 
         Окну MAX ни микрофон, ни камеру в режиме видео не отдаёт, а себе —
         отдаёт. Поэтому пишет человек привычной кнопкой в переписке, а мы
         забираем файл по ссылке из вложения.
         """
-        user_id = user_id_of(event)
         for attachment in attachments:
             kind, url = self._describe(attachment)
             # Пока платформа молодая, состав вложений стоит видеть целиком:
             # один раз это уже спасло от гадания, чем MAX шлёт голосовое.
             log.info("вложение: тип=%s, ссылка=%s", kind or "?", (url or "нет")[:120])
 
-        if self.inbox is None or user_id is None:
-            log.warning("вложение некуда положить: inbox=%s, user_id=%s",
-                        bool(self.inbox), user_id)
-            await self._say(event, NUDGE)
+        if self.inbox is None or user_id is None or chat_id is None:
+            log.warning("вложение некуда положить: inbox=%s, user_id=%s, chat_id=%s",
+                        bool(self.inbox), user_id, chat_id)
             return
 
         expected = self.inbox.expected(user_id)
         for attachment in attachments:
             kind, url = self._describe(attachment)
             if kind == "image":
-                await self._say(event, GOT_PHOTO)
+                await self._send(chat_id, GOT_PHOTO)
                 return
             if kind not in ("audio", "video", "file") or not url:
                 continue
+
+            data = await self._download(url)
+            if data is None:
+                await self._send(chat_id, CANT_TAKE)
+                return
 
             if kind == "video":
                 want = VIDEO
             elif kind == "audio":
                 want = VOICE
             else:
-                # Файлом присылают что угодно — разбираем по расширению,
-                # а при сомнении верим тому, чего мы ждали из окна.
-                ext = suffix_of(url, "")
-                if ext in (".mp4", ".mov", ".m4v", ".webm", ".3gp"):
-                    want = VIDEO
-                elif ext in (".ogg", ".oga", ".m4a", ".mp3", ".wav", ".opus", ".aac"):
-                    want = VOICE
-                else:
-                    want = expected or VOICE
+                # MAX отдаёт и голосовое, и видео как `file` со ссылкой
+                # `getfile?rq=...` — ни расширения, ни подсказки. Смотрим
+                # содержимое: есть видеодорожка — значит видео.
+                want = self.inbox.sniff(data, suffix_of(url, "")) or expected or VOICE
             suffix = suffix_of(url, ".mp4" if want == VIDEO else ".ogg")
 
-            data = await self._download(url)
-            if data is None:
-                await self._say(event, CANT_TAKE)
-                return
             try:
                 item = self.inbox.put(user_id, want, data, suffix)
             except ValueError as exc:
                 log.warning("вложение не принято: %s", exc)
-                await self._say(event, CANT_TAKE)
+                await self._send(chat_id, CANT_TAKE)
                 return
 
             if item.seconds and item.seconds < 2.0:
                 self.inbox.clear(user_id, want)
-                await self._say(event, TOO_SHORT_VIDEO if want == VIDEO else TOO_SHORT_VOICE)
+                await self._send(chat_id,
+                                 TOO_SHORT_VIDEO if want == VIDEO else TOO_SHORT_VOICE)
                 return
 
             self.inbox.disarm(user_id)
             template = GOT_VIDEO if want == VIDEO else GOT_VOICE
-            await self._say(event, template.format(seconds=item.seconds),
-                            open_app="video" if want == VIDEO else "photo")
+            await self._send(chat_id, template.format(seconds=item.seconds),
+                             open_app="video" if want == VIDEO else "photo")
             return
 
         # Дошли сюда — вложение есть, но не то, что мы умеем брать.
-        await self._say(event, NUDGE)
+        await self._send(chat_id, NUDGE)
 
     async def _download(self, url: str) -> bytes | None:
         try:
@@ -254,11 +272,25 @@ class ChatSide:
         if chat_id is None:
             log.warning("не нашли, куда отвечать: %s", type(event).__name__)
             return
+        await self._send(chat_id, text, open_app)
+
+    async def _send(self, chat_id: int, text: str, open_app: str = "") -> None:
         try:
             await self.bot.send_message(chat_id=chat_id, text=text,
                                         attachments=self._open_app(open_app))
         except Exception as exc:  # noqa: BLE001 — упавший мессенджер не должен ронять бота
             log.error("не отправилось в %s: %s", chat_id, exc)
+
+    @staticmethod
+    def keyboard(*buttons) -> list:
+        """Кнопки уезжают ОДНИМ вложением inline_keyboard, а не списком списков.
+
+        Список списков maxapi принимает молча, а падает уже при отправке:
+        «'list' object has no attribute 'model_dump'». Ряды кнопок живут
+        внутри ButtonsPayload, а не в самом attachments.
+        """
+        return [Attachment(type=AttachmentType.INLINE_KEYBOARD,
+                           payload=ButtonsPayload(buttons=[list(buttons)]))]
 
     def _open_app(self, screen: str) -> list | None:
         """Кнопка «вернуться в приложение» на нужный экран.
@@ -268,8 +300,8 @@ class ChatSide:
         """
         if not screen or not self.webapp_url:
             return None
-        return [[OpenAppButton(text="Открыть приложение",
-                               web_app=self.webapp_url, payload=screen)]]
+        return self.keyboard(OpenAppButton(text="Открыть приложение",
+                                           web_app=self.webapp_url, payload=screen))
 
     async def deliver(self, user_id: int, video: Path, caption: str, feedback_key: str) -> None:
         """Результат — в личку по user_id из проверенной подписи.
@@ -286,7 +318,8 @@ class ChatSide:
             await self.bot.send_message(
                 user_id=user_id,
                 text="Как получилось?",
-                attachments=[[CallbackButton(text="👎 Так себе", payload=f"bad:{feedback_key}")]],
+                attachments=self.keyboard(
+                    CallbackButton(text="👎 Так себе", payload=f"bad:{feedback_key}")),
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("кнопка обратной связи не ушла: %s", exc)
@@ -301,6 +334,9 @@ class ChatSide:
     # --- жизненный цикл ---------------------------------------------------
 
     async def start(self) -> None:
+        # Ставим ДО опроса: голосовые приходят обновлениями, которые maxapi
+        # пока не разбирает, и без подпорки они теряются молча.
+        maxcompat.install(self.take_raw)
         try:
             me = await self.bot.get_me()
             self.username = getattr(me, "username", "") or ""

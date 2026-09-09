@@ -72,6 +72,27 @@ class Inbox:
         except (OSError, ValueError):
             return {}
 
+    def sniff(self, data: bytes, suffix: str) -> str:
+        """Что это на самом деле — по содержимому, а не по имени.
+
+        MAX отдаёт голосовое и видео одинаково: тип `file` и ссылка вида
+        `getfile?rq=...`, без всякого расширения. Гадать тут нечего —
+        смотрим, есть ли внутри видеодорожка.
+        """
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=suffix or ".bin", delete=False) as fh:
+            fh.write(data)
+            path = Path(fh.name)
+        try:
+            info = probe(path, ffprobe=self.ffprobe)
+            return VIDEO if info.video_codec else VOICE
+        except Exception as exc:  # noqa: BLE001
+            log.warning("не опознали вложение: %s", exc)
+            return ""
+        finally:
+            path.unlink(missing_ok=True)
+
     def put(self, user_id: int, kind: str, data: bytes, suffix: str) -> Item:
         if kind not in KINDS:
             raise ValueError(f"неизвестный вид вложения: {kind}")
