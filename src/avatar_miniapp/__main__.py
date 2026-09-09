@@ -119,7 +119,8 @@ def main(argv: list[str] | None = None) -> int:
 
     chat: ChatSide | None = None
     if settings.chat_enabled:
-        chat = ChatSide(settings.bot_token, settings.webapp_url, inbox)
+        chat = ChatSide(settings.bot_token, settings.webapp_url, inbox,
+                        state_path=settings.data_dir / "chat_state.json")
         app["chat"] = chat
 
     async def deliver(job: Job) -> None:

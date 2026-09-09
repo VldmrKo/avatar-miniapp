@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 
@@ -102,17 +103,39 @@ def suffix_of(url: str, fallback: str) -> str:
 
 
 class ChatSide:
-    def __init__(self, token: str, webapp_url: str, inbox: Inbox | None = None) -> None:
+    def __init__(self, token: str, webapp_url: str, inbox: Inbox | None = None,
+                 state_path: Path | None = None) -> None:
         self.bot = Bot(token)
         self.dp = Dispatcher()
         self.webapp_url = webapp_url
         self.inbox = inbox
         self.username = ""
         # Какой способ вернуть человека в приложение MAX принял. Пустая
-        # строка — ещё не пробовали или ни один не подошёл.
-        self._good_way = ""
+        # строка — ещё не пробовали или ни один не подошёл. Запоминаем на
+        # диск: иначе после каждой выкладки снова два неудачных запроса
+        # к API, и в журнале снова выглядит как поломка.
+        self._state_path = state_path
+        self._good_way = self._recall()
         self._task: asyncio.Task | None = None
         self._register()
+
+    def _recall(self) -> str:
+        if not self._state_path or not self._state_path.is_file():
+            return ""
+        try:
+            return str(json.loads(self._state_path.read_text(encoding="utf-8")).get("way") or "")
+        except (OSError, ValueError):
+            return ""
+
+    def _remember(self, way: str) -> None:
+        if not self._state_path:
+            return
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            self._state_path.write_text(json.dumps({"way": way}, ensure_ascii=False),
+                                        encoding="utf-8")
+        except OSError as exc:
+            log.debug("не запомнили способ возврата: %s", exc)
 
     # --- обработчики ------------------------------------------------------
 
@@ -299,16 +322,22 @@ class ChatSide:
             # стоит по неудачному запросу к API на каждое сообщение.
             if self._good_way:
                 ways = [w for w in ways if w[0] == self._good_way] or ways
-            for name, attachments in ways:
+            last = len(ways) - 1
+            for number, (name, attachments) in enumerate(ways):
                 try:
                     await self.bot.send_message(chat_id=chat_id, text=text,
                                                 attachments=attachments)
                     if self._good_way != name:
                         log.info("кнопка возврата: работает вариант «%s»", name)
+                        self._remember(name)
                     self._good_way = name
                     return
                 except Exception as exc:  # noqa: BLE001
-                    log.warning("вариант «%s» не принят: %s", name, exc)
+                    # Перебор — штатная работа, а не поломка. Тревожный тон
+                    # уместен только когда кончились все варианты.
+                    level = log.warning if number == last else log.info
+                    level("вариант «%s» не подошёл%s: %s", name,
+                          "" if number == last else ", пробую следующий", exc)
             self._good_way = ""
             log.error("ни один способ вернуть в приложение не сработал — шлём без кнопки. "
                       "Проверьте адрес в business.max.ru/self и MAX_WEBAPP_URL")
