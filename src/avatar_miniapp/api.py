@@ -18,6 +18,10 @@ log = logging.getLogger("miniapp.api")
 
 MAX_UPLOAD_MB = 100
 MAX_SPEECH_SECONDS = 14.0
+# Ниже этой длины ролик нестабилен: минимум генерации — 4 секунды, и всё
+# незанятое речью время модель дозаполняет сама, вытаскивая текст из строк
+# промпта и из содержимого образца голоса. Предупреждаем, но не запрещаем.
+SHORT_CLIP_SECONDS = 5
 
 routes = web.RouteTableDef()
 
@@ -139,6 +143,24 @@ async def drop(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+@routes.post("/api/probe")
+async def probe(request: web.Request) -> web.Response:
+    """Что умеет вебвью на конкретном телефоне. Только в лог.
+
+    Возможности вебвью MAX нигде не описаны, а гадать по одной попытке
+    дорого: человек с телефоном далеко, повторить эксперимент — это ещё
+    один раунд переписки. Поэтому окно один раз рассказывает, что у него
+    есть, и ответ на все вопросы разом лежит в журнале.
+
+    Ничего не храним и никуда не отвечаем: это диагностика, а не фича.
+    """
+    who = caller_of(request)
+    body = await request.json()
+    log.info("вебвью %s: %s", who.user_id,
+             ", ".join(f"{k}={v}" for k, v in sorted(body.items()))[:500])
+    return web.json_response({"ok": True})
+
+
 @routes.post("/api/avatar")
 async def create(request: web.Request) -> web.Response:
     jobs: JobManager = request.app["jobs"]
@@ -210,11 +232,23 @@ async def estimate(request: web.Request) -> web.Response:
     а не символы: ограничивает нас именно длительность речи."""
     caller_of(request)
     body = await request.json()
-    seconds = _speech_seconds(str(body.get("text", "")))
+    text = str(body.get("text", ""))
+    seconds = _speech_seconds(text)
+    from avatar_core.speech import fit_duration
+
+    # Длину ролика считаем здесь той же функцией, что и генерация: если
+    # окно начнёт прикидывать её само, эти две оценки однажды разойдутся,
+    # и человек увидит предупреждение не там, где надо.
+    clip = fit_duration(text) if text.strip() else 0
     return web.json_response({
         "speech_seconds": round(seconds, 1),
         "limit_seconds": MAX_SPEECH_SECONDS,
         "over": seconds > MAX_SPEECH_SECONDS,
+        "clip_seconds": clip,
+        # Короткая реплика не заполняет ролик, а модель обязана заполнить
+        # его речью — и добирает недостающее из строк промпта и из того,
+        # что услышала в образце голоса. Меньше пяти секунд — зона риска.
+        "short": 0 < clip < SHORT_CLIP_SECONDS,
     })
 
 

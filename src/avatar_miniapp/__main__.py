@@ -138,6 +138,10 @@ def main(argv: list[str] | None = None) -> int:
                 settings.media_dir / job.media_name,
                 caption="Готово!",
                 feedback_key=job.job_id,
+                # Мультяшный портрет есть только у режима toon. Людям он
+                # нравится сам по себе — отдаём картинкой, чтобы можно было
+                # сохранить и поставить на аватарку.
+                poster=(settings.media_dir / job.poster_name) if job.poster_name else None,
             )
         else:
             # Отказ подготовки объясняет, что не так со входом, и это

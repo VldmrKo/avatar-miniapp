@@ -16,6 +16,10 @@
   var voice = { mode: "preset", id: "" };
   var inbox = { voice: null, video: null };
   var pickedVideo = null;
+  // Записано нативным рекордером прямо из окна, без выхода в чат.
+  // Голос мы всё равно вытаскиваем из дорожки, поэтому здесь может лежать
+  // и видео — для нас это источник голоса, а не картинки.
+  var pickedVoice = null;
   // Экран photo обслуживает два режима — обычный аватар и мультяшный.
   // Вход у них одинаковый, различается только то, что делает сервер,
   // поэтому держим один экран и одну переменную вместо двух копий разметки.
@@ -101,6 +105,15 @@
         }).then(function (r) {
           out.textContent = "≈ " + r.speech_seconds + " с из " + r.limit_seconds;
           out.className = r.over ? "counter over" : "counter";
+          // Короткая реплика — беда не та же, что длинная. Длинную мы
+          // запрещаем, короткую только помечаем: ролик выйдет, просто
+          // модель дозаполнит незанятое время речью, взяв её из промпта
+          // или из образца голоса.
+          if (!r.over && r.short) {
+            out.textContent += " · ролик " + r.clip_seconds
+              + " с — короче пяти секунд менее стабильны";
+            out.className = "counter warn";
+          }
         }).catch(function () { out.textContent = " "; });
       }, 250);
     });
@@ -123,7 +136,7 @@
         }
         // Человек мог записать голосовое, не закрывая окно, и вернуться
         // сюда переключением вкладки — перечитываем состояние.
-        if (name === "chat") refreshInbox();
+        if (name === "chat") { refreshInbox(); probeOnce(); }
       });
     }
 
@@ -148,6 +161,47 @@
         if (n === 0) voice.id = v.id;
         box.appendChild(b);
       });
+    });
+  }
+
+  // --- разведка возможностей вебвью ------------------------------------------
+  // Возможности вебвью MAX нигде не описаны. Один раз спрашиваем сам браузер
+  // и отправляем ответ в лог сервера: так один тап на телефоне заказчика
+  // отвечает сразу на все вопросы, вместо раунда переписки на каждый.
+  // Ничего не показываем человеку и ничего не решаем на основе ответа —
+  // это чистая диагностика.
+
+  var probed = false;
+
+  function probeOnce() {
+    if (probed) return;
+    probed = true;
+    var input = document.createElement("input");
+    var facts = {
+      platform: (WA && WA.platform) || "вне MAX",
+      version: (WA && WA.version) || "",
+      capture: "capture" in input,
+      mediaDevices: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+      recorder: typeof window.MediaRecorder === "function",
+      secure: window.isSecureContext === true
+    };
+    var send = function () {
+      api("/api/probe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(facts)
+      }).catch(function () {});
+    };
+    if (!facts.mediaDevices) { facts.mic = "нет mediaDevices"; send(); return; }
+    // Сам запрос микрофона делаем ровно здесь и ловим имя отказа: оно и
+    // отличает «не дали прав» от «вебвью не умеет в принципе».
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      facts.mic = "дали";
+      stream.getTracks().forEach(function (t) { t.stop(); });
+      send();
+    }).catch(function (e) {
+      facts.mic = "отказ: " + (e && e.name ? e.name : "неизвестно");
+      send();
     });
   }
 
@@ -184,7 +238,7 @@
       // Запись просят перезаписать — старую с экрана убираем сразу,
       // иначе непонятно, ждём мы новую или уже нет.
       inbox[kind] = null;
-      if (kind === "video") { pickedVideo = null; }
+      if (kind === "video") { pickedVideo = null; } else { pickedVoice = null; }
       showInbox();
     }).catch(function (e) {
       document.getElementById(kind === "voice" ? "voice-armed" : "video-armed").textContent =
@@ -200,6 +254,12 @@
       if (kind === "video") {
         pickedVideo = null;
         document.getElementById("video-file").value = "";
+        var vc = document.getElementById("video-capture");
+        if (vc) vc.value = "";
+      } else {
+        pickedVoice = null;
+        var sc = document.getElementById("voice-capture");
+        if (sc) sc.value = "";
       }
       armedScreen = false;
       showInbox();
@@ -225,6 +285,23 @@
       pickedVideo = input.files[0] || null;
       showVideoState();
     });
+
+    // Нативный рекордер. Сработает не везде: часть вебвью игнорирует
+    // capture и открывает обычный выбор файла, часть не открывает ничего.
+    // Во всех трёх случаях путь через бота остаётся на месте.
+    var shot = document.getElementById("video-capture");
+    if (shot) shot.addEventListener("change", function () {
+      pickedVideo = shot.files[0] || null;
+      armedScreen = false;
+      showVideoState();
+    });
+
+    var said = document.getElementById("voice-capture");
+    if (said) said.addEventListener("change", function () {
+      pickedVoice = said.files[0] || null;
+      armedScreen = false;
+      showInbox();
+    });
   }
 
   // Оба блока показываются одинаково, поэтому и рисуются одной функцией:
@@ -243,16 +320,24 @@
     armedLine.hidden = !waiting;
     record.hidden = waiting;
     record.textContent = filled ? againLabel : idleLabel;
+
+    // Кнопка нативного рекордера. Когда запись уже есть, она лишняя:
+    // переснять предлагает крестик в слоте, и две кнопки «записать»
+    // рядом с готовой записью — это ровно та каша, от которой мы уходим.
+    var capture = document.getElementById(prefix + "-capture-btn");
+    if (capture) capture.hidden = filled || waiting;
   }
 
   function showInbox() {
-    paintSlot(
-      "voice",
-      !!inbox.voice,
-      inbox.voice ? "Ваш голос: " + inbox.voice.seconds + " с, " + ago(inbox.voice.age_s) : "",
-      "Записать голос",
-      "Записать заново"
-    );
+    // Источников голоса теперь два: записанное прямо в окне и присланное
+    // боту в чат. Показываем то, что ближе к человеку по времени, — только
+    // что записанное важнее вчерашнего.
+    var caption = "";
+    if (pickedVoice) caption = "Записано: " + pickedVoice.name;
+    else if (inbox.voice) {
+      caption = "Ваш голос: " + inbox.voice.seconds + " с, " + ago(inbox.voice.age_s);
+    }
+    paintSlot("voice", !!caption, caption, "Записать через бота", "Записать заново");
     showVideoState();
   }
 
@@ -284,9 +369,13 @@
         if (!voice.id) { err.textContent = "Выберите голос."; return; }
         fd.append("voice_id", voice.id);
       } else if (voice.mode === "chat") {
-        // Файл лежит на сервере — сюда ничего не кладём, там подхватят.
-        if (!inbox.voice) {
-          err.textContent = "Голосового ещё нет. Запишите его боту в чат.";
+        if (pickedVoice) {
+          fd.append("voice", pickedVoice);
+        } else if (!inbox.voice) {
+          // Файл, присланный боту, лежит на сервере — сюда ничего не кладём,
+          // его подхватят там. А вот записанное в окне надо отдать явно.
+          err.textContent = "Записи голоса ещё нет. Нажмите «Записать здесь» "
+                          + "или запишите через бота.";
           return;
         }
       } else {

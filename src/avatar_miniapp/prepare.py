@@ -98,6 +98,15 @@ def prepare_voice(src: Path, dst: Path, *, ffmpeg: str = "ffmpeg") -> Path:
     except Exception as exc:  # noqa: BLE001
         raise PrepareError("Не удалось прочитать запись голоса.") from exc
 
+    # Сюда всё чаще приходит видео, а не аудио: человек снимает себя нативным
+    # рекордером прямо в окне, и голос мы берём из дорожки. Немой ролик при
+    # этом упадёт где-то в недрах ffmpeg — лучше сказать прямо здесь.
+    if not info.audio_codec:
+        raise PrepareError(
+            "В этой записи нет звука. Снимите ещё раз и проверьте, "
+            "что микрофон не выключен."
+        )
+
     if info.duration_s > MAX_SECONDS:
         begin, finish = detect_speech_window(src, ffmpeg=ffmpeg)
         finish = min(finish, begin + MAX_SECONDS - 0.2)

@@ -56,7 +56,7 @@ function visible(d, id) {
     check("кнопка записи видна", visible(d, "voice-record"));
     check("строка ожидания скрыта", !visible(d, "voice-armed"));
     check("подпись кнопки исходная",
-      d.getElementById("voice-record").textContent === "Записать голос",
+      d.getElementById("voice-record").textContent === "Записать через бота",
       d.getElementById("voice-record").textContent);
     w.close();
   }
@@ -91,7 +91,7 @@ function visible(d, id) {
     check("слот исчез после крестика", !visible(d, "voice-slot"));
     check("кнопка вернулась", visible(d, "voice-record"));
     check("подпись кнопки сброшена",
-      d.getElementById("voice-record").textContent === "Записать голос",
+      d.getElementById("voice-record").textContent === "Записать через бота",
       d.getElementById("voice-record").textContent);
     w.close();
   }
@@ -189,6 +189,61 @@ function visible(d, id) {
     check("подсказка про второй шаг",
       d.getElementById("wait-note").textContent.indexOf("оживляю") >= 0,
       d.getElementById("wait-note").textContent);
+    w.close();
+  }
+
+  // --- 10. короткая реплика помечается красным ------------------------------
+  {
+    const { w, d } = makeWindow({
+      name: "Аня", job: null, toon: true, inbox: { voice: null, video: null },
+    });
+    await settled();
+    // Подменяем ответ оценщика: важно поведение окна, а не арифметика сервера.
+    const area = d.getElementById("photo-text");
+    const out = d.querySelector('[data-counter="photo-text"]');
+    w.fetch = function (url) {
+      const body = url === "/api/estimate"
+        ? { speech_seconds: 1.3, limit_seconds: 14, over: false, clip_seconds: 4, short: true }
+        : {};
+      return Promise.resolve({ ok: true, status: 200,
+        json: () => Promise.resolve(body) });
+    };
+    area.value = "Вот это круто!";
+    area.dispatchEvent(new w.Event("input"));
+    await new Promise((r) => setTimeout(r, 350));
+    check("короткая реплика помечена", out.className.indexOf("warn") >= 0, out.className);
+    check("сказано, почему", out.textContent.indexOf("менее стабильны") >= 0,
+      out.textContent);
+    w.close();
+  }
+
+  // --- 11. запись прямо в окне -----------------------------------------------
+  // Короткий путь: нативный рекордер вместо похода в чат. Проверяем, что
+  // выбранный файл виден в слоте и что кнопка «через бота» при этом ушла.
+  {
+    const { w, d } = makeWindow({
+      name: "Аня", job: null, inbox: { voice: null, video: null },
+    });
+    await settled();
+    const input = d.getElementById("voice-capture");
+    check("кнопка «записать здесь» есть", !!input);
+    check("просит именно камеру", input.getAttribute("capture") === "user",
+      input.getAttribute("capture"));
+
+    // jsdom не даёт присвоить files, поэтому подменяем свойство.
+    Object.defineProperty(input, "files", {
+      value: [{ name: "record.mp4" }], configurable: true,
+    });
+    input.dispatchEvent(new w.Event("change"));
+    await settled();
+    check("запись показана в слоте", visible(d, "voice-slot"));
+    check("видно имя файла",
+      d.querySelector("#voice-slot .slot-text").textContent.indexOf("record.mp4") >= 0,
+      d.querySelector("#voice-slot .slot-text").textContent);
+    check("кнопка записи убрана — переснять предлагает крестик",
+      !visible(d, "voice-capture-btn"));
+    check("длинный путь предлагает перезапись",
+      d.getElementById("voice-record").textContent === "Записать заново");
     w.close();
   }
 

@@ -386,17 +386,37 @@ class ChatSide:
                 LinkButton(text="Открыть приложение", url=link))))
         return ways
 
-    async def deliver(self, user_id: int, video: Path, caption: str, feedback_key: str) -> None:
+    async def deliver(self, user_id: int, video: Path, caption: str, feedback_key: str,
+                      poster: Path | None = None) -> None:
         """Результат — в личку по user_id из проверенной подписи.
 
         Порядок важен: сначала уходит видео, потом отдельным сообщением кнопка.
         Есть ограничение частоты (порядка двух сообщений в секунду на адресата),
         и если второе не уйдёт — человек уже получил главное.
+
+        Мультяшный портрет отправляем отдельной картинкой ПОСЛЕ ролика: он
+        нравится людям сам по себе и его ставят на аватарку, а видео на это
+        не годится. Порядок именно такой — главное первым, приятное вторым.
         """
         media = InputMediaBuffer(
             buffer=video.read_bytes(), filename="avatar", type=UploadType.VIDEO
         )
         await self.bot.send_message(user_id=user_id, text=caption, attachments=[media])
+
+        if poster is not None and poster.is_file():
+            try:
+                await self.bot.send_message(
+                    user_id=user_id,
+                    text="И сам портрет — можно поставить на аватарку.",
+                    attachments=[InputMediaBuffer(
+                        buffer=poster.read_bytes(), filename="avatar",
+                        type=UploadType.IMAGE,
+                    )],
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Картинка — бонус. Не ушла — ролик человек всё равно получил,
+                # и ронять из-за этого доставку незачем.
+                log.warning("портрет не ушёл: %s", exc)
         try:
             await self.bot.send_message(
                 user_id=user_id,
