@@ -25,9 +25,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import CommandStart
 from aiogram.types import (BufferedInputFile, CallbackQuery, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
@@ -74,8 +76,22 @@ class TelegramSide:
     """
 
     def __init__(self, token: str, media: Attachments | None = None,
-                 conversation=None) -> None:
-        self.bot = Bot(token)
+                 conversation=None, proxy: str = "", ipv4_only: bool = False) -> None:
+        # Прокси нужен там, откуда до Telegram не дозвониться напрямую.
+        # Через него идёт ВСЁ: и опрос обновлений, и отправка, и скачивание
+        # присланных файлов, — поэтому он задаётся сессии целиком, а не
+        # отдельным вызовам.
+        session = AiohttpSession(proxy=proxy) if proxy else None
+        if proxy:
+            log.info("Telegram через прокси %s", _hide_password(proxy))
+        if ipv4_only:
+            # У api.telegram.org есть адрес IPv6, и он в DNS идёт первым.
+            # На машине без IPv6 попытка не отваливается сразу, а висит до
+            # таймаута — со стороны неотличимо от блокировки Telegram.
+            session = session or AiohttpSession()
+            session._connector_init["family"] = socket.AF_INET
+            log.info("Telegram только по IPv4")
+        self.bot = Bot(token, session=session) if session else Bot(token)
         self.dp = Dispatcher()
         self.media = media or Attachments()
         self.conversation = conversation
@@ -287,6 +303,16 @@ class TelegramSide:
         await self.bot.session.close()
 
 
+def _hide_password(proxy: str) -> str:
+    """Прокси в лог — без пароля: журнал читают и пересылают."""
+    if "@" not in proxy:
+        return proxy
+    head, _, tail = proxy.rpartition("@")
+    scheme, sep, creds = head.partition("://")
+    user = creds.split(":", 1)[0] if ":" in creds else creds
+    return f"{scheme}{sep}{user}:…@{tail}"
+
+
 def _why_no_telegram(exc: Exception) -> str:
     """Перевести сетевой отказ в то, что человеку делать.
 
@@ -309,9 +335,16 @@ def _why_no_telegram(exc: Exception) -> str:
         return ("Telegram не принял токен. Проверьте TELEGRAM_BOT_TOKEN — "
                 f"это тот, что выдал @BotFather?\nИсходная ошибка: {text}")
     return (
-        "Не достучались до api.telegram.org. Если сертификат ни при чём, "
-        "скорее всего до Telegram не пускает сеть — проверьте с той же машины "
-        f"обычным браузером.\nИсходная ошибка: {text}"
+        "Не достучались до api.telegram.org.\n"
+        "Сначала проверьте IPv6 — он тут первый подозреваемый. У Telegram "
+        "есть адрес IPv6, в DNS он идёт первым, и на машине без IPv6 "
+        "попытка не отваливается, а висит до таймаута: со стороны "
+        "неотличимо от блокировки.\n"
+        "    curl -4 -m 10 https://api.telegram.org/\n"
+        "Отвечает по -4 — поставьте TELEGRAM_IPV4_ONLY=1, и всё.\n"
+        "Не отвечает и так — значит режут сеть, и из кода это не обойти: "
+        "нужен прокси (TELEGRAM_PROXY=http://… или socks5://…) либо "
+        f"площадка, с которой Telegram доступен.\nИсходная ошибка: {text}"
     )
 
 

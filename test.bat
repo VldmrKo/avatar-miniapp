@@ -35,10 +35,10 @@ if errorlevel 1 (
 
 rem Same for aiogram: without it the Telegram tests do not fail, they are
 rem SKIPPED - and a green run that quietly checked nothing is worse than red.
-"%PY%" -c "import aiogram, truststore" >nul 2>&1
+"%PY%" -c "import aiogram, truststore, aiohttp_socks" >nul 2>&1
 if errorlevel 1 (
   echo installing aiogram and truststore, one moment...
-  "%PY%" -m pip install --quiet "aiogram>=3.13,<4" truststore || exit /b 1
+  "%PY%" -m pip install --quiet "aiogram>=3.13,<4" truststore "aiohttp-socks>=0.8" || exit /b 1
 )
 
 "%PY%" -m pytest "%APP%tests" -q

@@ -76,6 +76,14 @@ class Settings:
     # корневым сертификатом: браузер о нём знает, а Python — нет, и любой
     # запрос наружу падает с «self-signed certificate in certificate chain».
     trust_os_certs: bool = False
+    # Прокси до api.telegram.org. Нужен там, откуда Telegram недоступен
+    # напрямую: сервер в России до него не дозванивается, хотя GitHub и
+    # Kandinsky с той же машины отвечают. Пусто — ходим напрямую.
+    telegram_proxy: str = ""
+    # Ходить в Telegram только по IPv4. У api.telegram.org есть адрес IPv6,
+    # и если у машины IPv6 нет, попытка уходит в таймаут вместо отказа —
+    # выглядит неотличимо от блокировки, а лечится одной строкой.
+    telegram_ipv4_only: bool = False
     secrets_path: str = ""
     warnings: list[str] = field(default_factory=list)
 
@@ -150,6 +158,8 @@ def load(env_file: str | os.PathLike[str] | None = None) -> Settings:
         chat_enabled=_flag(values, "MINIAPP_CHAT_ENABLED", True),
         h3_lock_path=values.get("MINIAPP_H3_LOCK", ""),
         trust_os_certs=_flag(values, "MINIAPP_TRUST_OS_CERTS", False),
+        telegram_proxy=values.get("TELEGRAM_PROXY", ""),
+        telegram_ipv4_only=_flag(values, "TELEGRAM_IPV4_ONLY", False),
         secrets_path=values.get("_secrets_path", ""),
     )
     if settings.dev_allow_unsigned:

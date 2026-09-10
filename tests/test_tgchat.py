@@ -227,4 +227,72 @@ async def test_bad_token_is_not_blamed_on_the_network():
 
 async def test_anything_else_still_says_what_to_try():
     why = tgchat._why_no_telegram(Exception("Cannot connect to host"))
-    assert "браузером" in why
+    assert "curl" in why
+    assert "TELEGRAM_PROXY" in why
+
+
+# --- прокси ------------------------------------------------------------------
+# С сервера в России до api.telegram.org не дозвониться, хотя GitHub и
+# Kandinsky с той же машины отвечают. Прокси — единственный способ
+# остаться на этой площадке, и через него идёт всё: и опрос обновлений,
+# и отправка, и скачивание присланных файлов.
+
+async def test_proxy_is_hidden_from_the_log():
+    """Журнал читают и пересылают — пароль в нём остаться не должен."""
+    assert tgchat._hide_password("http://vasya:s3cret@proxy:3128") == (
+        "http://vasya:…@proxy:3128")
+    assert "s3cret" not in tgchat._hide_password("socks5://vasya:s3cret@p:1080")
+
+
+async def test_proxy_without_credentials_is_left_alone():
+    assert tgchat._hide_password("socks5://10.0.0.5:1080") == "socks5://10.0.0.5:1080"
+
+
+async def test_no_proxy_means_direct_session():
+    side = tgchat.TelegramSide("123:AA", proxy="")
+    try:
+        assert getattr(side.bot.session, "proxy", None) is None
+    finally:
+        await side.bot.session.close()
+
+
+async def test_proxy_reaches_the_session():
+    side = tgchat.TelegramSide("123:AA", proxy="socks5://10.0.0.5:1080")
+    try:
+        assert side.bot.session.proxy == "socks5://10.0.0.5:1080"
+    finally:
+        await side.bot.session.close()
+
+
+async def test_timeout_blames_ipv6_first():
+    """Порядок подсказок не косметика. У api.telegram.org есть адрес IPv6,
+    в DNS он идёт первым, и на машине без IPv6 попытка висит до таймаута —
+    неотличимо от блокировки. Мы на этом потеряли полчаса, решив, что
+    Telegram режут; лечилось одной строкой."""
+    why = tgchat._why_no_telegram(Exception("Request timeout error"))
+    assert why.index("IPv6") < why.index("прокси")
+    assert "curl -4" in why
+    assert "TELEGRAM_IPV4_ONLY=1" in why
+
+
+async def test_ipv4_only_reaches_the_connector():
+    import socket
+
+    side = tgchat.TelegramSide("123:AA", ipv4_only=True)
+    try:
+        assert side.bot.session._connector_init["family"] == socket.AF_INET
+    finally:
+        await side.bot.session.close()
+
+
+async def test_ipv4_only_and_proxy_live_together():
+    """Одно другого не исключает: прокси может быть доступен по IPv4,
+    а машина — без IPv6."""
+    import socket
+
+    side = tgchat.TelegramSide("123:AA", proxy="http://p:3128", ipv4_only=True)
+    try:
+        assert side.bot.session.proxy == "http://p:3128"
+        assert side.bot.session._connector_init["family"] == socket.AF_INET
+    finally:
+        await side.bot.session.close()

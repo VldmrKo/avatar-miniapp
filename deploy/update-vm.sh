@@ -39,7 +39,7 @@ chmod 600 "$APP/.env"
 # который уже стоит, ничего не стоит.
 sudo -u avatar "$APP/.venv/bin/pip" install --quiet -e "$CORE"
 sudo -u avatar "$APP/.venv/bin/pip" install --quiet aiohttp "maxapi==1.2.2" \
-	"aiogram>=3.13,<4" pillow truststore
+	"aiogram>=3.13,<4" "aiohttp-socks>=0.8" pillow truststore
 
 echo "=== перезапуск"
 # Ботов может быть два — в MAX и в Telegram. Код у них общий, поэтому

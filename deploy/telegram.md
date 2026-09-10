@@ -69,6 +69,72 @@ sudo systemctl restart avatar-miniapp
 sudo -u avatar cp /var/lib/avatar-miniapp/voices/*.wav /var/lib/avatar-tgbot/voices/
 ```
 
+## Если Telegram с сервера недоступен
+
+Наш случай. С ВМ в Yandex Cloud `api.telegram.org` не отвечает: соединение
+висит до таймаута и по IPv4 (`149.154.166.110`), и по IPv6. При этом GitHub
+и Kandinsky с той же машины работают, а с рабочего ноутбука Telegram
+доступен. То есть режет площадка, а не страна и не корпоративная сеть.
+
+Проверяется одной командой:
+
+```sh
+curl -4 -m 10 https://api.telegram.org/
+```
+
+Таймаут — недоступен. Любой ответ, включая ошибку от самого Telegram, —
+доступен, и ничего из этого раздела не нужно.
+
+### Туннель вместо прокси
+
+Нужна любая машина, с которой Telegram виден, и обычный SSH-доступ на неё.
+Заграница необязательна: режет конкретный хостер, поэтому подойдёт и
+российский VPS у другого провайдера — так и данные остаются где были.
+
+Прокси-сервер с портом наружу ставить НЕ надо: открытый прокси находят
+сканерами за сутки и начинают гонять через него чужой трафик. SSH умеет
+то же самое без единого открытого порта — `ssh -D` поднимает SOCKS5 на
+нашей стороне, соединение исходящее, авторизация по ключу.
+
+```sh
+sudo apt install autossh
+sudo -u avatar ssh-keygen -t ed25519 -f /var/lib/avatar-tgbot/tunnel_key -N ""
+sudo cat /var/lib/avatar-tgbot/tunnel_key.pub
+```
+
+Публичную половину — на VPS, в `~/.ssh/authorized_keys` пользователя
+`tunnel`, и сразу ограничить, чтобы этим ключом нельзя было ничего, кроме
+туннеля:
+
+```
+restrict,port-forwarding,command="/bin/false" ssh-ed25519 AAAA...
+```
+
+Дальше юнит туннеля (в нём заменить адрес VPS) и строка в настройках бота:
+
+```sh
+sudo cp /opt/avatar-miniapp/deploy/telegram-tunnel.service /etc/systemd/system/
+sudo nano /etc/systemd/system/telegram-tunnel.service   # адрес VPS
+sudo systemctl daemon-reload
+sudo systemctl enable --now telegram-tunnel
+
+echo 'TELEGRAM_PROXY=socks5://127.0.0.1:1080' | sudo tee -a /opt/avatar-miniapp/.env.tg
+sudo systemctl restart avatar-tgbot
+```
+
+Проверить сам туннель, не поднимая бота:
+
+```sh
+curl -x socks5h://127.0.0.1:1080 -m 10 -sS -o /dev/null -w '%{http_code}\n' \
+     https://api.telegram.org/
+```
+
+### Чего делать не нужно
+
+Вебхук вместо опроса не помогает: обновления он и правда принесёт сам,
+но отправлять сообщения и скачивать присланные файлы всё равно нам, и
+это те же исходящие к `api.telegram.org`.
+
 ## Проверка
 
 ```sh

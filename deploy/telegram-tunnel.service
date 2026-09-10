@@ -1,0 +1,63 @@
+# /etc/systemd/system/telegram-tunnel.service
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now telegram-tunnel
+#
+# SOCKS5 на 127.0.0.1:1080, через который телеграм-бот дотягивается до
+# api.telegram.org. С нашей площадки Telegram недоступен: соединение
+# висит до таймаута и по IPv4, и по IPv6, при живых GitHub и Kandinsky.
+#
+# ПОЧЕМУ ТУННЕЛЬ, А НЕ ПРОКСИ-СЕРВЕР. Обычный прокси — это открытый порт
+# в интернете, который находят сканерами за сутки и начинают гонять через
+# него чужой трафик. Здесь наружу не торчит ничего: соединение исходящее,
+# авторизация по ключу, слушаем только петлю.
+#
+# ЧТО НУЖНО НА ТОЙ СТОРОНЕ. Обычный SSH-доступ на машину, с которой
+# Telegram доступен. Ни прокси, ни настроек — sshd умеет -D сам.
+#
+#     sudo apt install autossh
+#     sudo -u avatar ssh-keygen -t ed25519 -f /var/lib/avatar-tgbot/tunnel_key -N ""
+#     # публичную половину (tunnel_key.pub) положить на VPS в
+#     # ~/.ssh/authorized_keys пользователя tunnel
+#
+# Ключ ограничить на той стороне так, чтобы им нельзя было ничего, кроме
+# туннеля — в authorized_keys перед ключом:
+#
+#     restrict,port-forwarding,command="/bin/false" ssh-ed25519 AAAA...
+
+[Unit]
+Description=SOCKS tunnel for Telegram
+After=network-online.target
+Wants=network-online.target
+# Бот без туннеля не поднимется, поэтому поднимаемся первыми. Если туннель
+# всё-таки упадёт, бота вытащит его собственный Restart=always.
+Before=avatar-tgbot.service
+
+[Service]
+Type=simple
+User=avatar
+Group=avatar
+# 0 — не сдаваться, если первое соединение не удалось: сеть после
+# перезагрузки поднимается не мгновенно.
+Environment=AUTOSSH_GATETIME=0
+# known_hosts кладём рядом с ключом, а не в домашний каталог: у avatar
+# его может не быть или он может быть недоступен на запись, и тогда ssh
+# с accept-new падает на ровном месте — при живой сети и верном ключе.
+ExecStart=/usr/bin/autossh -M 0 -N -D 127.0.0.1:1080 \
+    -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+    -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=accept-new \
+    -o IdentitiesOnly=yes \
+    -o UserKnownHostsFile=/var/lib/avatar-tgbot/known_hosts \
+    -i /var/lib/avatar-tgbot/tunnel_key \
+    tunnel@ЗАМЕНИТЕ-НА-АДРЕС-VPS
+Restart=always
+RestartSec=10
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+# Ключ и known_hosts лежат здесь.
+ReadWritePaths=/var/lib/avatar-tgbot
+
+[Install]
+WantedBy=multi-user.target

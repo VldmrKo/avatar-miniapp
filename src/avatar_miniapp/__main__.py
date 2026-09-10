@@ -181,7 +181,9 @@ def main(argv: list[str] | None = None) -> int:
             # установка MAX-бота не должна на нём спотыкаться.
             from .tgchat import TelegramSide
 
-            chat = TelegramSide(settings.bot_token, media=media)
+            chat = TelegramSide(settings.bot_token, media=media,
+                                proxy=settings.telegram_proxy,
+                                ipv4_only=settings.telegram_ipv4_only)
         else:
             chat = ChatSide(settings.bot_token, settings.webapp_url, media=media)
         chat.conversation = dialog.Conversation(

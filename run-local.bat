@@ -18,10 +18,10 @@ if not exist "%PY%" (
 rem The venv may predate the Telegram bot. Installing a package that is
 rem already there costs nothing; a missing one costs a confusing ImportError
 rem at startup, and only for whoever switches messengers.
-"%PY%" -c "import aiogram, truststore" >nul 2>&1
+"%PY%" -c "import aiogram, truststore, aiohttp_socks" >nul 2>&1
 if errorlevel 1 (
   echo installing aiogram and truststore, one moment...
-  "%PY%" -m pip install --quiet "aiogram>=3.13,<4" truststore || exit /b 1
+  "%PY%" -m pip install --quiet "aiogram>=3.13,<4" truststore "aiohttp-socks>=0.8" || exit /b 1
 )
 
 set "PYTHONPATH=%APP%src"

@@ -14,6 +14,11 @@
 Description=Avatar bot for Telegram
 After=network-online.target
 Wants=network-online.target
+# Туннель до Telegram, если он заведён. Wants, а не Requires: там, где
+# Telegram доступен напрямую, туннеля нет вовсе, и бот должен подняться
+# без него, а не отказаться стартовать.
+Wants=telegram-tunnel.service
+After=telegram-tunnel.service
 
 [Service]
 Type=simple
