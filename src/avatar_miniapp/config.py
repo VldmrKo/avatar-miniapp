@@ -31,7 +31,7 @@ class Settings:
     webapp_url: str = ""
     h3_base_url: str = ""
     h3_api_key: str = ""
-    # Kandinsky нужен только мультяшному режиму: он рисует аватар по фото,
+    # Kandinsky нужен только рисованному режиму: он рисует аватар по фото,
     # а оживляет его всё тот же H3. Пусто — режим просто не предлагается,
     # остальные два работают как работали.
     kandinsky_base_url: str = ""
@@ -92,7 +92,7 @@ class Settings:
 
     @property
     def toon_enabled(self) -> bool:
-        """Мультяшный режим доступен, только если есть чем рисовать.
+        """Рисованный режим доступен, только если есть чем рисовать.
 
         Проверяем здесь, а не в окне: окно должно узнавать об этом с сервера,
         иначе кнопка будет вести на экран, который гарантированно откажет.
@@ -143,7 +143,7 @@ def load(env_file: str | os.PathLike[str] | None = None) -> Settings:
         settings.use_stub = True
     if not settings.toon_enabled:
         settings.warnings.append(
-            "KANDINSKY_BASE_URL или KANDINSKY_TOKEN пусты — мультяшный аватар "
+            "KANDINSKY_BASE_URL или KANDINSKY_TOKEN пусты — рисованный аватар "
             "недоступен, кнопка в окне не появится."
         )
     # Токен, который «работает на ноутбуке и не работает на сервере», почти

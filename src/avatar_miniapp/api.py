@@ -88,7 +88,7 @@ async def state(request: web.Request) -> web.Response:
     inbox = request.app["inbox"]
     return web.json_response({
         "name": who.display_name,
-        # Без ключей Kandinsky мультяшный режим не работает. Окно узнаёт об
+        # Без ключей Kandinsky рисованный режим не работает. Окно узнаёт об
         # этом здесь и просто не рисует кнопку: лучше её отсутствие, чем
         # кнопка, которая гарантированно приведёт к отказу.
         "toon": settings.toon_enabled,
@@ -119,7 +119,7 @@ async def expect(request: web.Request) -> web.Response:
     kind = str(body.get("kind") or "")
     if kind not in ("voice", "video") or not inbox:
         return web.json_response({"error": "неизвестный вид записи"}, status=400)
-    # Экран, с которого ушли: голос нужен и обычному аватару, и мультяшному,
+    # Экран, с которого ушли: голос нужен и обычному аватару, и рисованному,
     # а кнопка из чата должна вернуть ровно туда, откуда человек ушёл.
     screen = str(body.get("screen") or "")
     if screen not in ("photo", "video", "toon"):
@@ -177,7 +177,7 @@ async def create(request: web.Request) -> web.Response:
         return web.json_response({"error": "неизвестный режим"}, status=400)
     if mode == "toon" and not settings.toon_enabled:
         return web.json_response(
-            {"error": "мультяшный аватар сейчас недоступен"}, status=503
+            {"error": "рисованный аватар сейчас недоступен"}, status=503
         )
 
     # Голос и видео могли приехать не через окно, а голосовым или роликом

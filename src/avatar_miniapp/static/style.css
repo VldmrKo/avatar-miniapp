@@ -1,10 +1,11 @@
 :root{
   --bg:#ffffff; --ink:#14161a; --muted:#6b7280; --line:#e5e7eb;
   --accent:#2f6df6; --accent-ink:#ffffff; --bad:#c0392b; --soft:#f5f6f8;
+  --warn:#a8791b;
 }
 @media (prefers-color-scheme: dark){
   :root{ --bg:#111318; --ink:#e8eaed; --muted:#9aa1ab; --line:#262a31;
-         --accent:#5b8cff; --soft:#191c22; }
+         --accent:#5b8cff; --soft:#191c22; --warn:#d9b95c; }
 }
 *{box-sizing:border-box}
 body{margin:0;padding:18px 16px calc(28px + env(safe-area-inset-bottom));
@@ -98,3 +99,10 @@ textarea{width:100%;font:inherit;padding:11px;border:1px solid var(--line);
   .spin{animation:none}
   .bar i{transition:none}
 }
+
+/* Честное предупреждение вместо кнопки, которая не сработает. Жёлтая
+   рамка, а не красная: это не ошибка человека и не поломка, это свойство
+   платформы, и пугать им незачем. */
+.statusline.warnbox{border-left:3px solid var(--warn);border-radius:10px;
+  padding:11px 13px;margin-bottom:12px;color:var(--ink)}
+.statusline.warnbox b{color:var(--warn)}

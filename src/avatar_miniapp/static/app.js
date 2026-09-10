@@ -20,7 +20,7 @@
   // Голос мы всё равно вытаскиваем из дорожки, поэтому здесь может лежать
   // и видео — для нас это источник голоса, а не картинки.
   var pickedVoice = null;
-  // Экран photo обслуживает два режима — обычный аватар и мультяшный.
+  // Экран photo обслуживает два режима — обычный аватар и рисованный.
   // Вход у них одинаковый, различается только то, что делает сервер,
   // поэтому держим один экран и одну переменную вместо двух копий разметки.
   var photoMode = "photo";
@@ -103,16 +103,21 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: area.value })
         }).then(function (r) {
-          out.textContent = "≈ " + r.speech_seconds + " с из " + r.limit_seconds;
-          out.className = r.over ? "counter over" : "counter";
-          // Короткая реплика — беда не та же, что длинная. Длинную мы
-          // запрещаем, короткую только помечаем: ролик выйдет, просто
-          // модель дозаполнит незанятое время речью, взяв её из промпта
-          // или из образца голоса.
-          if (!r.over && r.short) {
-            out.textContent += " · ролик " + r.clip_seconds
-              + " с — короче пяти секунд менее стабильны";
+          // Одно сообщение и не больше одного числа. Раньше здесь было
+          // «≈ 0.4 с из 14 · ролик 4 с — короче пяти секунд менее
+          // стабильны»: четыре числа в строке, и человек читает это как
+          // ошибку, хотя всё в порядке. Знать ему надо одно из трёх —
+          // всё хорошо, коротко или длинно.
+          if (r.over) {
+            out.textContent = "Длинно — не влезет. Сократите примерно на "
+                            + Math.ceil(r.speech_seconds - r.limit_seconds) + " с";
+            out.className = "counter over";
+          } else if (r.short) {
+            out.textContent = "Коротко — такой ролик выходит менее стабильным";
             out.className = "counter warn";
+          } else {
+            out.textContent = "≈ " + Math.round(r.speech_seconds) + " с";
+            out.className = "counter";
           }
         }).catch(function () { out.textContent = " "; });
       }, 250);
@@ -254,12 +259,8 @@
       if (kind === "video") {
         pickedVideo = null;
         document.getElementById("video-file").value = "";
-        var vc = document.getElementById("video-capture");
-        if (vc) vc.value = "";
       } else {
         pickedVoice = null;
-        var sc = document.getElementById("voice-capture");
-        if (sc) sc.value = "";
       }
       armedScreen = false;
       showInbox();
@@ -285,23 +286,6 @@
       pickedVideo = input.files[0] || null;
       showVideoState();
     });
-
-    // Нативный рекордер. Сработает не везде: часть вебвью игнорирует
-    // capture и открывает обычный выбор файла, часть не открывает ничего.
-    // Во всех трёх случаях путь через бота остаётся на месте.
-    var shot = document.getElementById("video-capture");
-    if (shot) shot.addEventListener("change", function () {
-      pickedVideo = shot.files[0] || null;
-      armedScreen = false;
-      showVideoState();
-    });
-
-    var said = document.getElementById("voice-capture");
-    if (said) said.addEventListener("change", function () {
-      pickedVoice = said.files[0] || null;
-      armedScreen = false;
-      showInbox();
-    });
   }
 
   // Оба блока показываются одинаково, поэтому и рисуются одной функцией:
@@ -321,11 +305,6 @@
     record.hidden = waiting;
     record.textContent = filled ? againLabel : idleLabel;
 
-    // Кнопка нативного рекордера. Когда запись уже есть, она лишняя:
-    // переснять предлагает крестик в слоте, и две кнопки «записать»
-    // рядом с готовой записью — это ровно та каша, от которой мы уходим.
-    var capture = document.getElementById(prefix + "-capture-btn");
-    if (capture) capture.hidden = filled || waiting;
   }
 
   function showInbox() {
@@ -357,7 +336,7 @@
     err.textContent = "";
     var fd = new FormData();
     // Экран называется photo, а режимов у него два: сервер должен получить
-    // именно режим, иначе мультяшный аватар молча станет обычным.
+    // именно режим, иначе рисованный аватар молча станет обычным.
     fd.append("mode", mode === "photo" ? photoMode : mode);
     fd.append("text", document.getElementById(mode + "-text").value);
 
@@ -436,7 +415,7 @@
       return;
     }
     if (job.status === "running") {
-      title.textContent = toon ? "Делаю мультяшного аватара" : "Делаю аватара";
+      title.textContent = toon ? "Делаю рисованного аватара" : "Делаю аватара";
       if (toon) {
         note.textContent = job.poster_url
           ? "Портрет готов, оживляю — ещё около полуминуты"

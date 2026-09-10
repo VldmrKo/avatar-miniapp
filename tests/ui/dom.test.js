@@ -212,38 +212,55 @@ function visible(d, id) {
     area.dispatchEvent(new w.Event("input"));
     await new Promise((r) => setTimeout(r, 350));
     check("короткая реплика помечена", out.className.indexOf("warn") >= 0, out.className);
-    check("сказано, почему", out.textContent.indexOf("менее стабильны") >= 0,
+    check("сказано, почему", out.textContent.indexOf("менее стабильным") >= 0,
       out.textContent);
+    // Считать числа в строке — единственный способ поймать возврат каши
+    // вида «≈ 0.4 с из 14 · ролик 4 с». Человеку нужно одно сообщение.
+    check("лишних чисел нет", (out.textContent.match(/\d+/g) || []).length === 0,
+      out.textContent);
+
+    // Нормальная реплика: одно число и никакой тревоги.
+    w.fetch = function () {
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(
+        { speech_seconds: 6.2, limit_seconds: 14, over: false, clip_seconds: 7, short: false }) });
+    };
+    area.value = "Привет! Меня зовут Владимир, и я цифровой аватар.";
+    area.dispatchEvent(new w.Event("input"));
+    await new Promise((r) => setTimeout(r, 350));
+    check("нормальная реплика без тревоги", out.className === "counter", out.className);
+    check("одно число", (out.textContent.match(/\d+/g) || []).length === 1, out.textContent);
+
+    // Слишком длинная: говорим, на сколько сократить, и красным.
+    w.fetch = function () {
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(
+        { speech_seconds: 17.4, limit_seconds: 14, over: true, clip_seconds: 15, short: false }) });
+    };
+    area.value = "очень длинный текст";
+    area.dispatchEvent(new w.Event("input"));
+    await new Promise((r) => setTimeout(r, 350));
+    check("длинная помечена", out.className.indexOf("over") >= 0, out.className);
+    check("сказано, на сколько сократить",
+      out.textContent.indexOf("4 с") >= 0, out.textContent);
     w.close();
   }
 
-  // --- 11. запись прямо в окне -----------------------------------------------
-  // Короткий путь: нативный рекордер вместо похода в чат. Проверяем, что
-  // выбранный файл виден в слоте и что кнопка «через бота» при этом ушла.
+  // --- 11. про запись голоса сказано честно и сразу -------------------------
+  // Микрофон вебвью MAX не даёт (проверено на телефоне: NotAllowedError).
+  // Значит человек должен узнать про длинный путь ДО того, как начнёт
+  // искать кнопку записи, а не после.
   {
     const { w, d } = makeWindow({
       name: "Аня", job: null, inbox: { voice: null, video: null },
     });
     await settled();
-    const input = d.getElementById("voice-capture");
-    check("кнопка «записать здесь» есть", !!input);
-    check("просит именно камеру", input.getAttribute("capture") === "user",
-      input.getAttribute("capture"));
-
-    // jsdom не даёт присвоить files, поэтому подменяем свойство.
-    Object.defineProperty(input, "files", {
-      value: [{ name: "record.mp4" }], configurable: true,
-    });
-    input.dispatchEvent(new w.Event("change"));
+    d.querySelector('[data-voice-tab="chat"]').click();
     await settled();
-    check("запись показана в слоте", visible(d, "voice-slot"));
-    check("видно имя файла",
-      d.querySelector("#voice-slot .slot-text").textContent.indexOf("record.mp4") >= 0,
-      d.querySelector("#voice-slot .slot-text").textContent);
-    check("кнопка записи убрана — переснять предлагает крестик",
-      !visible(d, "voice-capture-btn"));
-    check("длинный путь предлагает перезапись",
-      d.getElementById("voice-record").textContent === "Записать заново");
+    const body = d.querySelector('[data-voice-body="chat"]');
+    check("предупреждение про бота на месте",
+      body.textContent.indexOf("только через бота") >= 0);
+    check("предложена запасная дорога",
+      body.textContent.indexOf("готовый голос") >= 0);
+    check("кнопки записи в окне нет", !d.getElementById("voice-capture"));
     w.close();
   }
 
