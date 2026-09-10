@@ -129,3 +129,54 @@ def test_audio_from_silent_video_is_empty(tmp_path):
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
     ])
     assert box.audio_from(mute, ".mp4") == b""
+
+
+# --- кто автор события -------------------------------------------------------
+# Стоило нам живого бага: у нажатия кнопки заполнены оба поля, и в
+# message.sender лежит НЕ нажавший, а отправитель сообщения с кнопкой —
+# то есть сам бот. Разговор уезжал под id бота, а следующее сообщение
+# человека искало его под настоящим id и не находило.
+
+class _Node:
+    def __init__(self, **kids):
+        for name, value in kids.items():
+            setattr(self, name, value)
+
+
+BOT, HUMAN = 435474556, 19839514
+
+
+def test_button_press_is_attributed_to_the_person():
+    from avatar_miniapp.chat import user_id_of
+
+    press = _Node(
+        callback=_Node(user=_Node(user_id=HUMAN), payload="go:toon"),
+        # сообщение с кнопкой отправлял бот — это НЕ автор нажатия
+        message=_Node(sender=_Node(user_id=BOT),
+                      recipient=_Node(chat_id=416967270)),
+    )
+    assert user_id_of(press) == HUMAN
+
+
+def test_plain_message_is_attributed_to_its_sender():
+    from avatar_miniapp.chat import user_id_of
+
+    written = _Node(message=_Node(sender=_Node(user_id=HUMAN),
+                                  recipient=_Node(chat_id=416967270)))
+    assert user_id_of(written) == HUMAN
+
+
+def test_bot_started_is_attributed_to_the_person():
+    from avatar_miniapp.chat import user_id_of
+
+    assert user_id_of(_Node(user=_Node(user_id=HUMAN), chat_id=416967270)) == HUMAN
+
+
+def test_chat_id_survives_all_three():
+    from avatar_miniapp.chat import chat_id_of
+
+    press = _Node(callback=_Node(user=_Node(user_id=HUMAN)),
+                  message=_Node(sender=_Node(user_id=BOT),
+                                recipient=_Node(chat_id=416967270)))
+    assert chat_id_of(press) == 416967270
+    assert chat_id_of(_Node(chat_id=416967270)) == 416967270

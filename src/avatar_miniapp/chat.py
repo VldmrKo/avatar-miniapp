@@ -68,7 +68,23 @@ def chat_id_of(event) -> int | None:
 
 
 def user_id_of(event) -> int | None:
-    for path in (("message", "sender", "user_id"), ("user", "user_id"), ("user_id",)):
+    """Кто это написал. Порядок путей важнее, чем кажется.
+
+    У нажатия кнопки заполнено И `callback.user` (человек, который нажал),
+    И `message.sender` — но там отправитель СООБЩЕНИЯ, к которому кнопка
+    прикреплена, то есть сам бот. Пока `message.sender` стоял первым,
+    весь разговор писался под id бота: человек нажимал «рисованный
+    аватар», состояние ложилось на бота, а присланное следом фото
+    искало состояние под настоящим id и не находило — бот отвечал
+    «с чего начнём?» на каждое второе действие. Заодно все люди делили
+    одно состояние на всех.
+    """
+    for path in (
+        ("callback", "user", "user_id"),
+        ("user", "user_id"),
+        ("message", "sender", "user_id"),
+        ("user_id",),
+    ):
         node = event
         for attr in path:
             node = getattr(node, attr, None)
