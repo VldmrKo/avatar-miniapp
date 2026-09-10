@@ -53,7 +53,28 @@ MODE_TITLES = {
 # Фраза для образца голоса даётся дословно. Человек, которому сказали
 # просто «запишите голос», застревает на вопросе «а что говорить» и
 # присылает две секунды мычания.
-SAMPLE_LINE = "Это мой образец голоса для аватара"
+SAMPLE_LINE = "Это пример голоса для аватара"
+
+# Как записать свой голос — единственное место, где мессенджеры расходятся
+# по существу, а не по словам. MAX не передаёт ботам голосовые: по ним
+# прилетает пустое событие без тела, поэтому там образцом служит видео.
+# Telegram отдаёт голосовые нормально, и просить ради этого снимать себя
+# на камеру было бы издевательством.
+#
+# Подсказку выбирает точка входа и передаёт сюда: сам сценарий про
+# мессенджеры не знает и знать не должен.
+HINT_VOICE_MAX = (
+    "Снимите видео на 4–7 секунд и пришлите сюда.\n"
+    f"Скажите в тишине: «{SAMPLE_LINE}».\n\n"
+    "Нужен только голос — само видео никуда не пойдёт.\n"
+    "Записать голосовым, к сожалению, нельзя: MAX не передаёт"
+    " голосовые сообщения ботам."
+)
+HINT_VOICE_TELEGRAM = (
+    "В тишине запишите голосовое сообщение с фразой:\n"
+    f"«{SAMPLE_LINE}»\n\n"
+    "Или приложите аудио- либо видеофайл со своим голосом, до 15 секунд."
+)
 
 
 @dataclass
@@ -140,7 +161,8 @@ class Conversation:
 
     def __init__(self, store: Store, *, send: Send, save_file: Save,
                  start_job: StartJob, voices: Voices, estimate: Estimate,
-                 toon_enabled: bool = True) -> None:
+                 toon_enabled: bool = True,
+                 voice_hint: str = HINT_VOICE_MAX) -> None:
         self.store = store
         self.send = send
         self.save_file = save_file
@@ -148,6 +170,7 @@ class Conversation:
         self.voices = voices
         self.estimate = estimate
         self.toon_enabled = toon_enabled
+        self.voice_hint = voice_hint
 
     # --- вход ------------------------------------------------------------
 
@@ -332,11 +355,11 @@ class Conversation:
                 buttons.append((voice.get("title") or voice["id"], "voice:" + voice["id"]))
             buttons.append(("🎤 Записать свой", "voice:own"))
             buttons.append(("Отмена", "cancel"))
-            ready = ("Выберите готовый голос кнопкой ниже" if self.voices()
-                     else "Готовых голосов сейчас нет")
             await self.send(chat_id, (
                 "Шаг 2 из 3. Теперь голос.\n\n"
-                f"{ready} — или запишите свой, это одно короткое видео."
+                + ("Выберите стандартный голос или запишите свой."
+                   if self.voices()
+                   else "Готовых голосов сейчас нет — запишите свой.")
             ), buttons)
             return
 
@@ -354,10 +377,4 @@ class Conversation:
             return
 
     def _ask_own_voice(self) -> str:
-        return (
-            "Снимите видео на 4–7 секунд и пришлите сюда.\n"
-            f"Скажите в тишине: «{SAMPLE_LINE}».\n\n"
-            "Нужен только голос — само видео никуда не пойдёт.\n"
-            "Записать голосовым, к сожалению, нельзя: MAX не передаёт"
-            " голосовые сообщения ботам."
-        )
+        return self.voice_hint

@@ -22,7 +22,7 @@ from avatar_core.models import JobSpec, JobStatus
 from avatar_core.providers.h3 import H3Provider
 from avatar_core.toonify import Toonify
 
-from . import prepare, text
+from . import prepare, slot, text
 from .config import Settings
 from .jobs import Job, UserError
 
@@ -178,7 +178,12 @@ def make_runner(settings: Settings):
             # чем таймаут на восьмидесяти мегабайтах base64.
             provider.validate(spec, strict=True)
             job.progress = max(job.progress, 10)
-            result = provider.run(spec, work)
+            # Замок берём здесь, а не вокруг всего run_blocking: подготовка
+            # входов и рисовка портрета в Kandinsky к H3 отношения не имеют,
+            # и держать под ними общий слот значит зря морозить соседа.
+            # Мы уже в рабочем потоке, так что ожидание никого не морозит.
+            with slot.only_one(settings.h3_lock_path):
+                result = provider.run(spec, work)
             if result.status is not JobStatus.DONE or not result.output_path:
                 raise AvatarError(result.error or "Модель не вернула ролик")
             job.provider_job_id = result.provider_job_id

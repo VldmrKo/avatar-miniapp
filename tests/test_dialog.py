@@ -118,7 +118,7 @@ async def test_toon_with_own_voice(tmp_path):
     await fake.talk.on_button(CHAT, USER, "voice:own")
     # Инструкция обязана содержать готовую фразу: без неё человек застревает
     # на вопросе «а что говорить».
-    assert "образец голоса для аватара" in fake.last
+    assert dialog.SAMPLE_LINE in fake.last
 
     await fake.talk.on_file(CHAT, USER, "voice", b"wav", ".wav")
     assert "сказать" in fake.last.lower()
@@ -375,3 +375,46 @@ async def test_too_short_recording_is_refused_before_the_scenario():
     await chat._intake(CHAT, USER, [{"type": "video", "payload": {"url": "http://x/v.mp4"}}])
     assert talk.got == []
     assert chat.said and "двух секунд" in chat.said[-1]
+
+
+# --- голос: тексты под мессенджер --------------------------------------------
+# Единственное место, где мессенджеры расходятся по существу. В MAX
+# голосовые до бота не доходят вовсе, в Telegram доходят — и просить там
+# снимать себя на камеру было бы издевательством.
+
+async def test_voice_step_offers_presets_and_own(tmp_path):
+    fake = Fake(tmp_path, voices=[
+        {"id": "anya", "title": "Женский", "note": "спокойный"},
+        {"id": "sergey", "title": "Мужской", "note": "деловой"},
+    ])
+    await fake.talk.on_button(CHAT, USER, "go:photo")
+    await fake.talk.on_file(CHAT, USER, "photo", b"jpegdata", ".jpg")
+    assert "Выберите стандартный голос или запишите свой" in fake.last, fake.last
+    titles = [title for title, _ in fake.said[-1][1]]
+    assert titles[:2] == ["Женский", "Мужской"], titles
+    assert any("Записать свой" in t for t in titles), titles
+
+
+async def test_telegram_hint_asks_for_a_voice_message(tmp_path):
+    fake = Fake(tmp_path)
+    fake.talk.voice_hint = dialog.HINT_VOICE_TELEGRAM
+    await fake.talk.on_button(CHAT, USER, "go:photo")
+    await fake.talk.on_file(CHAT, USER, "photo", b"jpegdata", ".jpg")
+    await fake.talk.on_button(CHAT, USER, "voice:own")
+    said = fake.last
+    assert "голосовое сообщение" in said, said
+    assert dialog.SAMPLE_LINE in said
+    assert "15 секунд" in said
+    # И ни слова про MAX и про «снимите видео»: это чужая инструкция.
+    assert "MAX" not in said
+    assert "Снимите видео" not in said
+
+
+async def test_max_hint_still_explains_the_video_workaround(tmp_path):
+    """У MAX голосовые до бота не доходят — там обходной путь единственный,
+    и объяснить его надо, иначе человек будет жать микрофон впустую."""
+    fake = Fake(tmp_path)
+    await fake.talk.on_button(CHAT, USER, "go:photo")
+    await fake.talk.on_file(CHAT, USER, "photo", b"jpegdata", ".jpg")
+    await fake.talk.on_button(CHAT, USER, "voice:own")
+    assert "MAX не передаёт" in fake.last

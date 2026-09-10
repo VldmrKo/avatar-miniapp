@@ -25,8 +25,20 @@ def _flag(values: dict[str, str], key: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on", "да"}
 
 
+MESSENGERS = ("max", "telegram")
+# Как называется токен каждого мессенджера в secrets.env. Держим рядом,
+# чтобы предупреждения называли ту переменную, которой человеку не хватает,
+# а не абстрактный «токен бота».
+TOKEN_KEYS = {"max": "MAX_BOT_TOKEN", "telegram": "TELEGRAM_BOT_TOKEN"}
+
+
 @dataclass
 class Settings:
+    # Какой мессенджер обслуживает ЭТОТ процесс. Один процесс — один
+    # мессенджер и один каталог данных: у людей в MAX и в Telegram
+    # одинаковые числовые id, и общий каталог склеил бы разных людей
+    # в одного. Второй бот поднимается вторым юнитом с другим значением.
+    messenger: str = "max"
     bot_token: str = ""
     webapp_url: str = ""
     h3_base_url: str = ""
@@ -54,6 +66,16 @@ class Settings:
     # Сколько живёт подпись initData.
     init_data_max_age_s: int = 86400
     init_data_future_skew_s: int = 300
+    # Общая на всю машину очередь к модели. Инстанс H3 один, на двух
+    # параллельных генерациях он падает по памяти, а ботов теперь двое —
+    # каждый со своей внутренней очередью на единицу. Пусто — не
+    # ограничивать (один процесс, машина разработчика, тесты).
+    h3_lock_path: str = ""
+    # Доверять хранилищу сертификатов операционной системы вместо встроенного
+    # в Python набора. Нужно там, где корпоративная сеть вскрывает TLS своим
+    # корневым сертификатом: браузер о нём знает, а Python — нет, и любой
+    # запрос наружу падает с «self-signed certificate in certificate chain».
+    trust_os_certs: bool = False
     secrets_path: str = ""
     warnings: list[str] = field(default_factory=list)
 
@@ -62,6 +84,11 @@ class Settings:
         """Готовые голоса. НЕ в репозитории: это записи живых людей,
         а avatar-miniapp публичный. Кладутся на сервер рядом с данными."""
         return self.data_dir / "voices"
+
+    @property
+    def token_key(self) -> str:
+        """Имя переменной с токеном — то, что человеку править в secrets.env."""
+        return TOKEN_KEYS.get(self.messenger, "MAX_BOT_TOKEN")
 
     @property
     def token_hint(self) -> str:
@@ -101,8 +128,12 @@ class Settings:
 
 def load(env_file: str | os.PathLike[str] | None = None) -> Settings:
     values = load_secrets(Path(env_file) if env_file else None)
+    messenger = (values.get("MINIAPP_MESSENGER") or "max").strip().lower()
+    if messenger not in MESSENGERS:
+        messenger = "max"
     settings = Settings(
-        bot_token=values.get("MAX_BOT_TOKEN", ""),
+        messenger=messenger,
+        bot_token=values.get(TOKEN_KEYS[messenger], ""),
         webapp_url=values.get("MAX_WEBAPP_URL", ""),
         host=values.get("MINIAPP_HOST", "127.0.0.1"),
         port=int(values.get("MINIAPP_PORT") or 8081),
@@ -117,6 +148,8 @@ def load(env_file: str | os.PathLike[str] | None = None) -> Settings:
         use_stub=_flag(values, "MINIAPP_USE_STUB", False),
         dev_allow_unsigned=_flag(values, "MINIAPP_DEV_ALLOW_UNSIGNED", False),
         chat_enabled=_flag(values, "MINIAPP_CHAT_ENABLED", True),
+        h3_lock_path=values.get("MINIAPP_H3_LOCK", ""),
+        trust_os_certs=_flag(values, "MINIAPP_TRUST_OS_CERTS", False),
         secrets_path=values.get("_secrets_path", ""),
     )
     if settings.dev_allow_unsigned:
@@ -124,10 +157,16 @@ def load(env_file: str | os.PathLike[str] | None = None) -> Settings:
             "MINIAPP_DEV_ALLOW_UNSIGNED=1 — запросы без подписи проходят. "
             "На сервере этого быть не должно."
         )
+    if messenger != "max" and (values.get("MINIAPP_DATA_DIR") or "") == "":
+        settings.warnings.append(
+            f"MINIAPP_MESSENGER={messenger}, но MINIAPP_DATA_DIR не задан — "
+            "данные лягут туда же, где у MAX. Разным ботам нужны разные "
+            "каталоги: числовые id людей в мессенджерах совпадают."
+        )
     if settings.chat_enabled and not settings.bot_token:
         settings.warnings.append(
-            f"MAX_BOT_TOKEN пуст ({settings.secrets_path}) — чат-часть не поднимется, "
-            "работает только веб-часть."
+            f"{settings.token_key} пуст ({settings.secrets_path}) — чат-часть "
+            "не поднимется, работает только веб-часть."
         )
         settings.chat_enabled = False
     if not settings.use_stub and not (settings.h3_base_url and settings.h3_api_key):
@@ -146,12 +185,13 @@ def load(env_file: str | os.PathLike[str] | None = None) -> Settings:
     token = settings.bot_token
     if token and not token.isascii():
         settings.warnings.append(
-            "В MAX_BOT_TOKEN есть не-ASCII символы — похоже, вместо токена "
-            "подставился текст-заполнитель или значение скопировалось с лишним."
+            f"В {settings.token_key} есть не-ASCII символы — похоже, вместо "
+            "токена подставился текст-заполнитель или значение скопировалось "
+            "с лишним."
         )
     if token and any(ch.isspace() for ch in token):
         settings.warnings.append(
-            "В MAX_BOT_TOKEN есть пробельные символы внутри значения — "
+            f"В {settings.token_key} есть пробельные символы внутри значения — "
             "скорее всего, токен склеился с чем-то при копировании."
         )
     return settings

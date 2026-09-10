@@ -1,0 +1,51 @@
+# /etc/systemd/system/avatar-tgbot.service
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now avatar-tgbot
+#   journalctl -u avatar-tgbot -f
+#
+# Второй бот — тот же код, тот же venv, тот же каталог /opt/avatar-miniapp.
+# Отличается ровно тремя вещами: мессенджер, токен и каталог данных.
+#
+# Данные РАЗНЫЕ и это принципиально: числовые id людей в MAX и в Telegram
+# совпадают, и общий каталог склеил бы разговоры разных людей в один.
+
+[Unit]
+Description=Avatar bot for Telegram
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=avatar
+Group=avatar
+WorkingDirectory=/opt/avatar-miniapp
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/avatar-miniapp/src
+
+# Порядок файлов важен: systemd применяет их по мере перечисления, и
+# последний выигрывает. Сначала общие секреты — H3, Kandinsky, — потом
+# то, что отличает этого бота от соседнего.
+#
+# Токен держим в файле, а не строкой Environment= в юните: юниты в
+# /etc/systemd/system читаются кем угодно, а .env лежит под 600.
+EnvironmentFile=/opt/avatar-miniapp/.env
+EnvironmentFile=/opt/avatar-miniapp/.env.tg
+
+ExecStart=/opt/avatar-miniapp/.venv/bin/python -m avatar_miniapp
+Restart=always
+RestartSec=5
+
+# Соседи на этой машине не должны пострадать, если нас распухнет: тут
+# ещё бот в MAX и чужой kandiapp, а памяти на всех два гигабайта.
+MemoryMax=600M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+# Свой каталог данных плюс общий замок к модели: инстанс H3 один на всех,
+# и два бота договариваются о нём через файл (см. src/avatar_miniapp/slot.py).
+ReadWritePaths=/var/lib/avatar-tgbot
+ReadWritePaths=/var/lib/avatar-shared
+
+[Install]
+WantedBy=multi-user.target

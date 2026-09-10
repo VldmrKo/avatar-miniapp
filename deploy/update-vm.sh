@@ -38,15 +38,24 @@ chmod 600 "$APP/.env"
 # Зависимости могли поменяться вместе с кодом; переустановка пакета,
 # который уже стоит, ничего не стоит.
 sudo -u avatar "$APP/.venv/bin/pip" install --quiet -e "$CORE"
-sudo -u avatar "$APP/.venv/bin/pip" install --quiet aiohttp "maxapi==1.2.2" pillow
+sudo -u avatar "$APP/.venv/bin/pip" install --quiet aiohttp "maxapi==1.2.2" \
+	"aiogram>=3.13,<4" pillow truststore
 
 echo "=== перезапуск"
-systemctl restart avatar-miniapp
-sleep 4
-systemctl is-active --quiet avatar-miniapp || {
-	journalctl -u avatar-miniapp -n 30 --no-pager >&2
-	exit 1
-}
+# Ботов может быть два — в MAX и в Telegram. Код у них общий, поэтому
+# перезапускаем всех, кто заведён; отсутствующий юнит это не ошибка.
+for unit in avatar-miniapp avatar-tgbot; do
+	systemctl list-unit-files "$unit.service" >/dev/null 2>&1 || continue
+	systemctl cat "$unit" >/dev/null 2>&1 || continue
+	systemctl restart "$unit"
+	sleep 4
+	systemctl is-active --quiet "$unit" || {
+		echo "ПРОВАЛ: $unit не поднялся" >&2
+		journalctl -u "$unit" -n 30 --no-pager >&2
+		exit 1
+	}
+	echo "  $unit — жив"
+done
 
 HEALTH=$(curl -s -m 5 "http://127.0.0.1:$PORT/api/health" || true)
 echo "изнутри: $HEALTH"

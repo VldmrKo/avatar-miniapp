@@ -29,6 +29,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ReadWritePaths=/var/lib/avatar-miniapp
+# Общий замок к модели: инстанс H3 один, а ботов на машине теперь двое.
+# Без права писать сюда замок не возьмётся и очередь работать не будет.
+ReadWritePaths=/var/lib/avatar-shared
 
 [Install]
 WantedBy=multi-user.target

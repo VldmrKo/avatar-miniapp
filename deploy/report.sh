@@ -1,9 +1,14 @@
 #!/bin/sh
 # Отчёт по работе сервиса. Под sudo:
 #
-#     sudo sh /opt/avatar-miniapp/deploy/report.sh [дней]
+#     sudo sh /opt/avatar-miniapp/deploy/report.sh [дней] [юнит]
 #
-# По умолчанию за неделю. Два источника, и оба нужны: файлы задач знают,
+# По умолчанию за неделю и по боту в MAX. Второй бот — телеграмный:
+#
+#     sudo sh /opt/avatar-miniapp/deploy/report.sh 7 avatar-tgbot
+#
+# Считаются они порознь: это разные аудитории, и складывать их в одну
+# кучу значит не увидеть, ради чего вообще переезжали. Два источника, и оба нужны: файлы задач знают,
 # что человек просил и что получилось, а журнал знает, как он это оценил —
 # оценки нигде больше не хранятся, они только строки в логе.
 #
@@ -12,20 +17,23 @@
 set -e
 
 DAYS=${1:-7}
+UNIT=${2:-avatar-miniapp}
 APP=/opt/avatar-miniapp
-DATA=/var/lib/avatar-miniapp
+# Каталог данных назван по юниту — так задумано при заведении второго бота.
+DATA=/var/lib/$UNIT
 PY="$APP/.venv/bin/python"
 
 [ "$(id -u)" = "0" ] || { echo "Запускать под sudo: журнал иначе пуст." >&2; exit 1; }
 [ -x "$PY" ] || PY=python3
+[ -d "$DATA" ] || { echo "Нет каталога $DATA — такого бота на машине нет." >&2; exit 1; }
 
-echo "=== Аватары: отчёт за последние $DAYS дн."
+echo "=== Аватары: отчёт за последние $DAYS дн. — $UNIT"
 echo
 
 # Оценки живут только в журнале — вытаскиваем их до питона и отдаём файлом.
 MARKS=$(mktemp)
 trap 'rm -f "$MARKS"' EXIT
-journalctl -u avatar-miniapp --since "$DAYS days ago" --no-pager -o cat 2>/dev/null \
+journalctl -u "$UNIT" --since "$DAYS days ago" --no-pager -o cat 2>/dev/null \
 	| grep -E "по задаче|длинная реплика" > "$MARKS" || true
 
 DAYS="$DAYS" DATA="$DATA" MARKS="$MARKS" "$PY" - <<'PY'

@@ -1,9 +1,15 @@
 """Точка входа.
 
 Веб-сервер и чат-часть поднимаются В ОДНОМ процессе: разносить их нельзя,
-иначе понадобится второй токен, а второго бота у нас нет.
+иначе понадобится второй токен на тот же мессенджер.
 
     python -m avatar_miniapp
+
+Мессенджер выбирается настройкой `MINIAPP_MESSENGER`: max или telegram.
+Один процесс обслуживает ОДИН мессенджер и свой каталог данных — числовые
+id людей в разных мессенджерах совпадают, и общий каталог склеил бы разных
+людей в одного. Второй бот поднимается вторым юнитом с другим значением
+настройки; к одной и той же модели их пускает общий замок (см. slot.py).
 """
 
 from __future__ import annotations
@@ -65,6 +71,32 @@ def make_stub_runner(media_dir: Path, seconds: float = 20.0):
     return run
 
 
+def use_os_certificates() -> None:
+    """Доверять тому же, чему доверяет операционная система.
+
+    В корпоративной сети трафик наружу часто вскрывается прокси, который
+    подписывает соединения своим корневым сертификатом. В хранилище системы
+    он есть — иначе не работал бы браузер, — а Python смотрит в собственный
+    набор и об этом сертификате не знает. Наружу это выглядит так:
+
+        SSLCertVerificationError: self-signed certificate in certificate chain
+
+    и читается как поломка нашего кода, хотя код тут ни при чём.
+
+    Отключать проверку сертификатов в таком случае НЕЛЬЗЯ: это ровно та
+    дверь, ради которой перехват и делают. Правильный ход — сказать Python
+    смотреть в системное хранилище, что и делает truststore.
+    """
+    try:
+        import truststore
+    except ImportError:
+        log.warning("MINIAPP_TRUST_OS_CERTS=1, но пакета truststore нет. "
+                    "Поставьте: pip install truststore")
+        return
+    truststore.inject_into_ssl()
+    log.info("сертификаты: доверяем хранилищу системы")
+
+
 def load_voices(settings) -> list[dict]:
     """Готовые голоса — по факту наличия файлов в каталоге данных.
 
@@ -95,8 +127,14 @@ def main(argv: list[str] | None = None) -> int:
     settings = config.load()
     settings.ensure_dirs()
 
+    # До первого запроса наружу: сессии мессенджера и провайдеров создают
+    # контекст TLS при старте, и подменять его потом уже поздно.
+    if settings.trust_os_certs:
+        use_os_certificates()
+
     for warning in settings.warnings:
         log.warning("%s", warning)
+    log.info("мессенджер: %s", settings.messenger)
     log.info("секреты: %s", settings.secrets_path)
     log.info("данные:  %s", settings.data_dir)
     if settings.chat_enabled:
@@ -113,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     jobs = JobManager(settings.jobs_dir, runner, concurrency=1)
     app = build_app(settings, jobs, lambda: load_voices(settings))
 
-    chat: ChatSide | None = None
+    chat = None
     if settings.chat_enabled:
         # Сценарий в переписке — единственный путь, по которому в систему
         # попадают файлы из чата. Кладём их туда же, куда окно кладёт свои:
@@ -136,11 +174,16 @@ def main(argv: list[str] | None = None) -> int:
 
             return estimate_speech_seconds(text)
 
-        chat = ChatSide(
-            settings.bot_token, settings.webapp_url,
-            media=Attachments(ffprobe=settings.ffmpeg.replace("ffmpeg", "ffprobe"),
-                              ffmpeg=settings.ffmpeg),
-        )
+        media = Attachments(ffprobe=settings.ffmpeg.replace("ffmpeg", "ffprobe"),
+                            ffmpeg=settings.ffmpeg)
+        if settings.messenger == "telegram":
+            # Импорт внутри ветки: aiogram нужен только телеграм-боту, и
+            # установка MAX-бота не должна на нём спотыкаться.
+            from .tgchat import TelegramSide
+
+            chat = TelegramSide(settings.bot_token, media=media)
+        else:
+            chat = ChatSide(settings.bot_token, settings.webapp_url, media=media)
         chat.conversation = dialog.Conversation(
             dialog.Store(settings.data_dir / "dialogs"),
             send=chat.ask,
@@ -149,6 +192,12 @@ def main(argv: list[str] | None = None) -> int:
             voices=lambda: load_voices(settings),
             estimate=estimate,
             toon_enabled=settings.toon_enabled,
+            # Единственное, что в сценарии зависит от мессенджера: в MAX
+            # голосовые до бота не доходят, и образец приходится снимать
+            # видео; в Telegram достаточно нажать микрофон.
+            voice_hint=(dialog.HINT_VOICE_TELEGRAM
+                        if settings.messenger == "telegram"
+                        else dialog.HINT_VOICE_MAX),
         )
         app["chat"] = chat
 
@@ -196,7 +245,7 @@ class PortBusy(RuntimeError):
     pass
 
 
-async def serve(app: web.Application, settings, jobs: JobManager, chat: ChatSide | None) -> None:
+async def serve(app: web.Application, settings, jobs: JobManager, chat) -> None:
     """Поднимаем в правильном порядке: сначала порт, потом бот.
 
     Порт — самое вероятное место отказа (второй экземпляр, соседний сервис).
