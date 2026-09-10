@@ -458,12 +458,14 @@ class ChatSide:
             await self.bot.send_message(
                 user_id=user_id,
                 text="Как получилось?",
-                # Три оценки в один ряд: подписи короткие, влезают. Ряд
-                # с «сделать ещё» отдельно — это действие, а не оценка,
-                # и путать их в одной строке не стоит.
+                # По кнопке в ряд. Три в строку не влезают: на телефоне
+                # «Нормально» обрезается до «Нормальнс», и выглядит это
+                # не как компактность, а как поломка. Проверено вживую
+                # в Telegram, но экран у мессенджеров один и тот же.
                 attachments=self.rows(
-                    [CallbackButton(text=title, payload=f"rate:{score}:{feedback_key}")
-                     for score, title in RATINGS],
+                    *[[CallbackButton(text=title,
+                                      payload=f"rate:{score}:{feedback_key}")]
+                      for score, title in RATINGS],
                     [CallbackButton(text="🔁 Сделать ещё", payload="again")],
                 ),
             )

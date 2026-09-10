@@ -265,9 +265,13 @@ class TelegramSide:
         try:
             await self.bot.send_message(
                 user_id, "Как получилось?",
+                # По кнопке в ряд. В строку они не влезают: на телефоне
+                # «Нормально» обрезается до «Нормальнс», и выглядит это
+                # не как компактность, а как поломка.
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=title, callback_data=f"rate:{score}:{feedback_key}")
-                     for score, title in RATINGS],
+                    *[[InlineKeyboardButton(
+                        text=title, callback_data=f"rate:{score}:{feedback_key}")]
+                      for score, title in RATINGS],
                     [InlineKeyboardButton(text="🔁 Сделать ещё", callback_data="again")],
                 ]),
             )
