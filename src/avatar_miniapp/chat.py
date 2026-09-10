@@ -30,10 +30,9 @@ log = logging.getLogger("miniapp.chat")
 
 GREETING = (
     "Привет! Я делаю говорящего аватара по вашему фото или видео.\n\n"
-    "Здесь, в переписке, я ничего не умею — вся работа в окне приложения.\n"
-    "Нажмите «Старт» внизу, чтобы открыть его."
+    "Напишите что-нибудь или нажмите «Старт» внизу."
 )
-NUDGE = "Нажмите «Старт» внизу — там всё и происходит."
+NUDGE = "Напишите «/start» — покажу, что умею."
 GOT_PHOTO = (
     "Фото загружается в приложении: там же выбирается голос и текст.\n"
     "Нажмите «Старт» внизу."
@@ -104,11 +103,14 @@ def suffix_of(url: str, fallback: str) -> str:
 
 class ChatSide:
     def __init__(self, token: str, webapp_url: str, inbox: Inbox | None = None,
-                 state_path: Path | None = None) -> None:
+                 state_path: Path | None = None, conversation=None) -> None:
         self.bot = Bot(token)
         self.dp = Dispatcher()
         self.webapp_url = webapp_url
         self.inbox = inbox
+        # Сценарий в переписке. Без него бот остаётся тем, чем был, —
+        # приветствием и доставкой; с ним умеет весь путь сам.
+        self.conversation = conversation
         self.username = ""
         # Какой способ вернуть человека в приложение MAX принял. Пустая
         # строка — ещё не пробовали или ни один не подошёл. Запоминаем на
@@ -118,6 +120,25 @@ class ChatSide:
         self._good_way = self._recall()
         self._task: asyncio.Task | None = None
         self._register()
+
+    async def _ack(self, event) -> None:
+        """Подтвердить нажатие. Без него MAX крутит спиннер на кнопке.
+
+        Пустым ack он не принимает, текст обязателен. И сам callback мог
+        устареть: сообщение живёт неделями, а мы за это время перезапускались,
+        поэтому отказ здесь — не повод ломать обработку.
+        """
+        try:
+            await event.ack(notification="Готово")
+        except Exception as exc:  # noqa: BLE001
+            log.debug("ack не прошёл: %s", exc)
+
+    async def _menu_or_greeting(self, event) -> None:
+        chat_id, user_id = chat_id_of(event), user_id_of(event)
+        if self.conversation and chat_id and user_id:
+            await self.conversation.begin(chat_id, user_id)
+            return
+        await self._say(event, GREETING)
 
     def _recall(self) -> str:
         if not self._state_path or not self._state_path.is_file():
@@ -144,11 +165,19 @@ class ChatSide:
 
         @dp.bot_started()
         async def _started(event: BotStarted) -> None:
-            await self._say(event, GREETING)
+            await self._menu_or_greeting(event)
 
         @dp.message_created(F.message.body.text.lower().startswith("/start"))
         async def _start(event: MessageCreated) -> None:
-            await self._say(event, GREETING)
+            await self._menu_or_greeting(event)
+
+        @dp.message_callback(F.callback.payload.startswith("again"))
+        async def _again(event: MessageCallback) -> None:
+            """«Сделать ещё» после готового ролика — снова в меню."""
+            await self._ack(event)
+            chat_id, user_id = chat_id_of(event), user_id_of(event)
+            if self.conversation and chat_id and user_id:
+                await self.conversation.begin(chat_id, user_id, greet=False)
 
         @dp.message_callback(F.callback.payload.startswith("bad:"))
         async def _bad(event: MessageCallback) -> None:
@@ -161,6 +190,18 @@ class ChatSide:
             except Exception as exc:  # noqa: BLE001
                 log.debug("ack не прошёл: %s", exc)
 
+        # Кнопки сценария. Регистрируется после именованных, но до catch-all
+        # по сообщениям: у callback-ов свой поток событий.
+        @dp.message_callback()
+        async def _step(event: MessageCallback) -> None:
+            payload = (event.callback.payload or "")
+            if payload.startswith("bad:") or payload.startswith("again"):
+                return
+            await self._ack(event)
+            chat_id, user_id = chat_id_of(event), user_id_of(event)
+            if self.conversation and chat_id and user_id:
+                await self.conversation.on_button(chat_id, user_id, payload)
+
         # Ловим всё остальное. Регистрируется ПОСЛЕДНИМ: зарегистрированный
         # раньше catch-all перехватил бы и /start.
         @dp.message_created()
@@ -168,6 +209,17 @@ class ChatSide:
             attachments = getattr(getattr(event.message, "body", None), "attachments", None)
             if attachments:
                 await self._take_attachments(event, attachments)
+                return
+            text = getattr(getattr(event.message, "body", None), "text", "") or ""
+            chat_id, user_id = chat_id_of(event), user_id_of(event)
+            if self.conversation and chat_id and user_id:
+                # Текст — это ответ на «что сказать аватару», если мы его ждём.
+                if await self.conversation.on_text(chat_id, user_id, text):
+                    return
+                # Ничего не ждём — показываем меню. Раньше здесь было «нажмите
+                # Старт внизу», и человек, написавший боту «привет», упирался
+                # в тупик: кнопки он не видел, а других вариантов ему не дали.
+                await self.conversation.begin(chat_id, user_id, greet=False)
                 return
             await self._say(event, NUDGE)
 
@@ -233,9 +285,25 @@ class ChatSide:
             return
 
         expected = self.inbox.expected(user_id)
+        # Кто главный на это вложение. Окно, если оно явно попросило запись
+        # («жду голос»), — иначе сценарий в переписке, если он чего-то ждёт.
+        # Порядок именно такой: человек, нажавший в окне «записать», ушёл
+        # сюда с конкретным намерением, и перехватывать его нельзя.
+        step = ""
+        if not expected and self.conversation:
+            step = self.conversation.waiting_for(user_id)
+
         for attachment in attachments:
             kind, url = self._describe(attachment)
             if kind == "image":
+                if step and url:
+                    data = await self._download(url)
+                    if data is None:
+                        await self._send(chat_id, CANT_TAKE)
+                        return
+                    await self.conversation.on_file(
+                        chat_id, user_id, "photo", data, suffix_of(url, ".jpg"))
+                    return
                 await self._send(chat_id, GOT_PHOTO)
                 return
             if kind not in ("audio", "video", "file") or not url:
@@ -256,6 +324,18 @@ class ChatSide:
                 # содержимое: есть видеодорожка — значит видео.
                 want = self.inbox.sniff(data, suffix_of(url, "")) or expected or VOICE
             suffix = suffix_of(url, ".mp4" if want == VIDEO else ".ogg")
+
+            # Сценарий в переписке забирает вложение себе. Голос он просит
+            # видеороликом (голосовые до бота не доходят), поэтому на шаге
+            # голоса из ролика сразу вынимаем дорожку — дальше по коду это
+            # делается только для окна.
+            if step:
+                if step == "voice" and want == VIDEO:
+                    sound = self.inbox.audio_from(data, suffix)
+                    if sound:
+                        data, suffix, want = sound, ".wav", VOICE
+                await self.conversation.on_file(chat_id, user_id, want, data, suffix)
+                return
 
             # Голосовые до бота не доезжают — MAX присылает по ним пустое
             # событие без тела. Зато видео доезжает. Поэтому если человек
@@ -362,6 +442,31 @@ class ChatSide:
         return [Attachment(type=AttachmentType.INLINE_KEYBOARD,
                            payload=ButtonsPayload(buttons=[list(buttons)]))]
 
+    @staticmethod
+    def rows(*rows) -> list:
+        """То же, но несколько рядов. На телефоне три кнопки в строку
+        превращаются в три обрезанных слова, поэтому меню идёт столбиком."""
+        return [Attachment(type=AttachmentType.INLINE_KEYBOARD,
+                           payload=ButtonsPayload(buttons=[list(r) for r in rows]))]
+
+    async def ask(self, chat_id: int, text: str, buttons: list) -> None:
+        """Сообщение сценария: текст плюс кнопки-ответы, по одной в ряд.
+
+        Отдельный метод, а не параметр к _send: тот занят кнопкой возврата
+        в приложение и её перебором вариантов, и мешать эти две задачи —
+        верный способ однажды отправить не то и не туда.
+        """
+        attachments = []
+        if buttons:
+            attachments = self.rows(*[
+                [CallbackButton(text=title, payload=payload)] for title, payload in buttons
+            ])
+        try:
+            await self.bot.send_message(chat_id=chat_id, text=text,
+                                        attachments=attachments)
+        except Exception as exc:  # noqa: BLE001
+            log.error("сценарий: не отправилось в %s: %s", chat_id, exc)
+
     def _ways_back(self, screen: str) -> list[tuple[str, list]]:
         """Чем вернуть человека в приложение, от лучшего к работающему.
 
@@ -421,8 +526,10 @@ class ChatSide:
             await self.bot.send_message(
                 user_id=user_id,
                 text="Как получилось?",
-                attachments=self.keyboard(
-                    CallbackButton(text="👎 Так себе", payload=f"bad:{feedback_key}")),
+                attachments=self.rows(
+                    [CallbackButton(text="🔁 Сделать ещё", payload="again")],
+                    [CallbackButton(text="👎 Так себе", payload=f"bad:{feedback_key}")],
+                ),
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("кнопка обратной связи не ушла: %s", exc)

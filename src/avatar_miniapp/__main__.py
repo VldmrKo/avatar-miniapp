@@ -16,7 +16,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import config, generate
+from . import config, dialog, generate
 from .api import build_app
 from .chat import ChatSide
 from .inbox import Inbox
@@ -119,8 +119,38 @@ def main(argv: list[str] | None = None) -> int:
 
     chat: ChatSide | None = None
     if settings.chat_enabled:
+        # Сценарий в переписке. Складываем его файлы отдельно от inbox:
+        # inbox держит по одному последнему файлу на вид и живёт сутки,
+        # а здесь файлы принадлежат конкретному незаконченному разговору.
+        uploads = settings.data_dir / "uploads"
+
+        def save_file(user_id: int, kind: str, data: bytes, suffix: str) -> Path:
+            uploads.mkdir(parents=True, exist_ok=True)
+            path = uploads / f"chat_{user_id}_{kind}{suffix or '.bin'}"
+            path.write_bytes(data)
+            return path
+
+        def start_job(user_id: int, mode: str, text: str, inputs: dict):
+            # JobBusy наружу летит как есть: сценарий покажет человеку
+            # «у вас уже готовится один ролик», а не общий отказ.
+            return jobs.create(user_id, mode, text, inputs)
+
+        def estimate(text: str) -> float:
+            from avatar_core.speech import estimate_speech_seconds
+
+            return estimate_speech_seconds(text)
+
         chat = ChatSide(settings.bot_token, settings.webapp_url, inbox,
                         state_path=settings.data_dir / "chat_state.json")
+        chat.conversation = dialog.Conversation(
+            dialog.Store(settings.data_dir / "dialogs"),
+            send=chat.ask,
+            save_file=save_file,
+            start_job=start_job,
+            voices=lambda: load_voices(settings),
+            estimate=estimate,
+            toon_enabled=settings.toon_enabled,
+        )
         app["chat"] = chat
 
     async def deliver(job: Job) -> None:
