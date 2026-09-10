@@ -110,3 +110,50 @@ async def test_failed_job_is_also_reported(tmp_path):
 
 async def _collect(bucket: list, job: Job) -> None:
     bucket.append(job)
+
+
+# --- секреты из окружения ----------------------------------------------------
+# На сервере секреты приходят не из файла, а из EnvironmentFile юнита.
+# Список префиксов, которые мы забираем из окружения, — белый, и забытый
+# в нём префикс выглядит как «токен пуст» без единой подсказки, почему
+# ровно тот же токен работает на машине разработчика. Так и случилось
+# с телеграм-ботом: локально токен лежал в файле секретов и проходил,
+# на сервере приходил из окружения и молча терялся.
+
+@pytest.mark.parametrize("name", [
+    "MAX_BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "H3_API_KEY",
+    "KANDINSKY_TOKEN", "MINIAPP_DATA_DIR", "MINIAPP_MESSENGER",
+])
+def test_secret_from_the_environment_reaches_settings(monkeypatch, tmp_path, name):
+    from avatar_core.config import load_secrets
+
+    monkeypatch.setenv(name, "значение-из-юнита")
+    values = load_secrets(tmp_path / "нет-такого-файла.env")
+    assert values.get(name) == "значение-из-юнита", (
+        f"{name} не доехал из окружения — проверьте список префиксов "
+        "в avatar_core.config.load_secrets"
+    )
+
+
+def test_telegram_token_lands_in_settings(monkeypatch, tmp_path):
+    """Сквозная проверка того самого случая: мессенджер и токен приходят
+    только из окружения, файла секретов нет вовсе."""
+    from avatar_miniapp import config as appconfig
+
+    monkeypatch.setenv("MINIAPP_MESSENGER", "telegram")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:AA-токен")
+    monkeypatch.setenv("MINIAPP_DATA_DIR", str(tmp_path))
+    settings = appconfig.load(tmp_path / "нет-такого-файла.env")
+    assert settings.messenger == "telegram"
+    assert settings.bot_token == "123:AA-токен"
+    assert settings.chat_enabled, settings.warnings
+
+
+def test_a_foreign_variable_is_not_picked_up(monkeypatch, tmp_path):
+    """Список белый намеренно: тянуть в настройки всё окружение процесса
+    значит однажды подхватить чужой PATH или пароль соседнего сервиса."""
+    from avatar_core.config import load_secrets
+
+    monkeypatch.setenv("SOME_OTHER_SECRET", "не наше")
+    values = load_secrets(tmp_path / "нет-такого-файла.env")
+    assert "SOME_OTHER_SECRET" not in values
