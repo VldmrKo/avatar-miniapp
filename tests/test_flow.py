@@ -151,16 +151,23 @@ async def test_finished_job_is_not_offered_again(settings):
 
 
 @pytest.mark.asyncio
-async def test_long_text_is_refused_with_seconds(settings):
-    """Лимит объясняется секундами, а не символами: ограничивает длительность."""
-    client, _, _ = await make_client(settings, _quick)
+async def test_long_text_is_accepted_and_only_flagged(settings):
+    """Запрета на длину больше нет: отказ на входе люди принимали хуже,
+    чем кривой результат. Оценка длительности осталась — на ней держится
+    предупреждение в окне, — но ход задаче она не преграждает."""
+    client, jobs, _ = await make_client(settings, _quick)
     try:
         long_text = "Добрый день! " + "Я расскажу про аватары и как их делать. " * 6
         r = await client.post("/api/avatar", data=form(text=long_text), headers=headers())
-        assert r.status == 400
-        body = await r.json()
-        assert body["speech_seconds"] > 14
-        assert "сократите" in body["error"].lower()
+        assert r.status == 201
+        created = await r.json()
+        assert jobs.get(created["job_id"]) is not None
+
+        # А сам счётчик по-прежнему честно говорит, что текст длинный.
+        estimate = await (await client.post("/api/estimate", json={"text": long_text},
+                                            headers=headers())).json()
+        assert estimate["over"] is True
+        assert estimate["speech_seconds"] > 14
     finally:
         await client.close()
 

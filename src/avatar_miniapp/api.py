@@ -128,16 +128,15 @@ async def create(request: web.Request) -> web.Response:
     if not text.strip():
         return web.json_response({"error": "нужен текст реплики"}, status=400)
 
+    # Длинный текст мы больше НЕ отклоняем. Ролик у модели не длиннее 15 с,
+    # и всё, что не поместилось, она смажет или не договорит — но это её
+    # дело, а не наше. Отказ на входе люди воспринимали хуже плохого
+    # результата: подсчёт слов раздражал, а починить его было нечем.
+    # Предупреждение осталось на счётчике в окне и на шаге текста в боте.
     seconds = _speech_seconds(text)
     if seconds > MAX_SPEECH_SECONDS:
-        # Модель заполняет речью всё время ролика, а ролик не длиннее 15 с.
-        # Значит длинный текст не «обрежется», а превратится в кашу.
-        return web.json_response({
-            "error": f"текст на {seconds:.0f} секунд, а ролик не длиннее "
-                     f"{MAX_SPEECH_SECONDS:.0f}. Сократите примерно на "
-                     f"{(seconds - MAX_SPEECH_SECONDS):.0f} с.",
-            "speech_seconds": round(seconds, 1),
-        }, status=400)
+        log.info("длинная реплика: %.0f с при пределе %.0f — пропускаем как есть",
+                 seconds, MAX_SPEECH_SECONDS)
 
     try:
         job = jobs.create(who.user_id, mode, text, files)

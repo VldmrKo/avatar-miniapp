@@ -33,6 +33,9 @@ GREETING = (
     "Напишите «/start» — покажу, что умею."
 )
 NUDGE = "Напишите «/start» — покажу, что умею."
+# Оценка ролика. Порядок слева направо — от лучшего к худшему.
+RATINGS = (("good", "👍 Отлично"), ("ok", "😐 Нормально"), ("bad", "👎 Так себе"))
+RATING_MARKS = {"good": "👍", "ok": "😐", "bad": "👎"}
 TOO_SHORT_VOICE = (
     "Запись короче двух секунд — модель такую не примет.\n"
     "Запишите ещё раз, скажите пару фраз."
@@ -161,13 +164,31 @@ class ChatSide:
             if self.conversation and chat_id and user_id:
                 await self.conversation.begin(chat_id, user_id, greet=False)
 
-        @dp.message_callback(F.callback.payload.startswith("bad:"))
-        async def _bad(event: MessageCallback) -> None:
-            key = (event.callback.payload or "").split(":", 1)[-1]
-            log.info("👎 по задаче %s", key)
+        @dp.message_callback(F.callback.payload.startswith("rate:"))
+        async def _rate(event: MessageCallback) -> None:
+            """Оценка ролика. Три кнопки, а не одна.
+
+            С одним «так себе» в журнале копились только жалобы, и по ним
+            нельзя сказать, много их или мало: молчание одинаково значит
+            и «понравилось», и «лень нажимать». Три кнопки дают знаменатель.
+            """
+            _, _, rest = (event.callback.payload or "").partition(":")
+            score, _, key = rest.partition(":")
+            log.info("%s по задаче %s", RATING_MARKS.get(score, "оценка ?"), key)
             try:
                 # ack пустым MAX не принимает, текст обязателен. И сам callback
                 # мог устареть: сообщение живёт неделями, а мы перезапускались.
+                await event.ack(notification="Спасибо!")
+            except Exception as exc:  # noqa: BLE001
+                log.debug("ack не прошёл: %s", exc)
+
+        @dp.message_callback(F.callback.payload.startswith("bad:"))
+        async def _bad_legacy(event: MessageCallback) -> None:
+            """Старая одиночная кнопка. Сообщения в чате живут неделями,
+            и человек вполне может нажать её во вчерашнем ролике."""
+            key = (event.callback.payload or "").split(":", 1)[-1]
+            log.info("👎 по задаче %s", key)
+            try:
                 await event.ack(notification="Спасибо, записал")
             except Exception as exc:  # noqa: BLE001
                 log.debug("ack не прошёл: %s", exc)
@@ -177,7 +198,8 @@ class ChatSide:
         @dp.message_callback()
         async def _step(event: MessageCallback) -> None:
             payload = (event.callback.payload or "")
-            if payload.startswith("bad:") or payload.startswith("again"):
+            if (payload.startswith("rate:") or payload.startswith("bad:")
+                    or payload.startswith("again")):
                 return
             await self._ack(event)
             chat_id, user_id = chat_id_of(event), user_id_of(event)
@@ -436,9 +458,13 @@ class ChatSide:
             await self.bot.send_message(
                 user_id=user_id,
                 text="Как получилось?",
+                # Три оценки в один ряд: подписи короткие, влезают. Ряд
+                # с «сделать ещё» отдельно — это действие, а не оценка,
+                # и путать их в одной строке не стоит.
                 attachments=self.rows(
+                    [CallbackButton(text=title, payload=f"rate:{score}:{feedback_key}")
+                     for score, title in RATINGS],
                     [CallbackButton(text="🔁 Сделать ещё", payload="again")],
-                    [CallbackButton(text="👎 Так себе", payload=f"bad:{feedback_key}")],
                 ),
             )
         except Exception as exc:  # noqa: BLE001

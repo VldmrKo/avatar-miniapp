@@ -155,17 +155,19 @@ async def test_wrong_attachment_is_explained(tmp_path):
     assert fake.talk.waiting_for(USER) == "photo"
 
 
-async def test_too_long_text_says_how_much_to_cut(tmp_path):
+async def test_long_text_warns_but_goes(tmp_path):
+    """Раньше длинный текст отклоняли и требовали сократить. Люди начали
+    считать слова и ругаться — справедливо: это наша арифметика, не их
+    работа. Теперь делаем как просят и говорим, чем это грозит."""
     fake = Fake(tmp_path)
     await fake.talk.on_button(CHAT, USER, "go:video")
     await fake.talk.on_file(CHAT, USER, "video", b"mp4", ".mp4")
     await fake.talk.on_text(CHAT, USER, " ".join(["слово"] * 60))
-    assert not fake.jobs
-    assert "сократите" in fake.last.lower()
-    # Шаг не потерян: человек пришлёт текст короче, и всё поедет дальше.
-    assert fake.talk.waiting_for(USER) == "text"
-    await fake.talk.on_text(CHAT, USER, "Короткая реплика для проверки, вот такая.")
     assert len(fake.jobs) == 1
+    assert "сократите" not in fake.last.lower()
+    assert "смазаться" in fake.last.lower(), fake.last
+    # Разговор закончен так же, как на обычной реплике.
+    assert fake.talk.waiting_for(USER) == ""
 
 
 async def test_short_text_warns_but_goes(tmp_path):
@@ -225,6 +227,48 @@ async def test_no_presets_still_offers_own_voice(tmp_path):
     await fake.talk.on_file(CHAT, USER, "photo", b"jpeg", ".jpg")
     assert "voice:own" in fake.last_buttons
     assert "Готовых голосов сейчас нет" in fake.last
+
+
+# --- что человек читает ------------------------------------------------------
+# Тексты правились по живым замечаниям: обещание «меньше минуты» не
+# сбывалось из-за очереди, а про нижнюю границу в пять секунд человек
+# узнавал только постфактум, когда ролик уже выходил кривым.
+
+async def test_text_step_names_both_borders(tmp_path):
+    fake = Fake(tmp_path)
+    await fake.talk.on_button(CHAT, USER, "go:photo")
+    await fake.talk.on_file(CHAT, USER, "photo", b"jpegdata", ".jpg")
+    await fake.talk.on_button(CHAT, USER, fake.button_titled("Аня"))
+    said = fake.last
+    assert f"{dialog.WORDS_FOR_FLOOR} слов" in said, said
+    assert "менее стабильными" in said, said
+    assert f"{dialog.WORDS_FOR_LIMIT} слов" in said, said
+
+
+async def test_waiting_promise_is_one_and_vague(tmp_path):
+    """Одно обещание на все режимы: «меньше минуты», сорванное очередью,
+    человек читает как поломку."""
+    fake = Fake(tmp_path)
+    await fake.talk.on_button(CHAT, USER, "go:toon")
+    await fake.talk.on_file(CHAT, USER, "photo", b"jpegdata", ".jpg")
+    await fake.talk.on_button(CHAT, USER, fake.button_titled("Аня"))
+    await fake.talk.on_text(CHAT, USER, "Привет! Это мой аватар, и он говорит моим голосом.")
+    assert "пару минут" in fake.last, fake.last
+    assert "меньше минуты" not in fake.last
+    # И одинаково для обоих режимов: отдельной оговорки про рисованный нет.
+    assert "рисованный" not in fake.last.lower()
+
+
+async def test_three_ratings_with_distinct_payloads():
+    """Одна кнопка «так себе» давала только жалобы без знаменателя:
+    молчание одинаково значит «понравилось» и «лень нажимать»."""
+    from avatar_miniapp.chat import RATINGS
+
+    scores = [score for score, _ in RATINGS]
+    assert scores == ["good", "ok", "bad"]
+    titles = [title for _, title in RATINGS]
+    assert len(set(titles)) == 3
+    assert all(len(t) <= 14 for t in titles), titles
 
 
 # --- кто получает вложение ---------------------------------------------------
