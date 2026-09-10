@@ -16,6 +16,10 @@
   var voice = { mode: "preset", id: "" };
   var inbox = { voice: null, video: null };
   var pickedVideo = null;
+  // Экран photo обслуживает два режима — обычный аватар и мультяшный.
+  // Вход у них одинаковый, различается только то, что делает сервер,
+  // поэтому держим один экран и одну переменную вместо двух копий разметки.
+  var photoMode = "photo";
   // Бот прикладывает к ответу кнопку с payload — по ней открываем
   // сразу тот экран, с которого человек уходил записывать.
   var startAt = (WA && WA.initDataUnsafe && WA.initDataUnsafe.start_param) || "";
@@ -66,6 +70,16 @@
       // на выбор режима: человек как раз идёт в чат записывать.
       if (!armedScreen && (screen === "photo" || screen === "video")) show("pick");
     });
+  }
+
+  function setPhotoMode(mode) {
+    photoMode = mode === "toon" ? "toon" : "photo";
+    var toon = photoMode === "toon";
+    document.getElementById("photo-title").textContent =
+      toon ? "Cartoon avatar" : "Аватар по фото";
+    document.getElementById("toon-lead").hidden = !toon;
+    document.getElementById("photo-go").textContent =
+      toon ? "Нарисовать и оживить" : "Сделать аватара";
   }
 
   // --- счётчик секунд -------------------------------------------------------
@@ -159,7 +173,9 @@
     return api("/api/inbox/expect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: kind })
+      // Экран отдаём серверу: кнопка из чата должна вернуть человека туда,
+      // откуда он ушёл, а голос нужен обоим режимам экрана photo.
+      body: JSON.stringify({ kind: kind, screen: screen === "photo" ? photoMode : screen })
     }).then(function () {
       // Отпускаем «назад» системе: закрыть окно программно в API MAX нечем,
       // а незанятую кнопку мессенджер обрабатывает сам и окно закрывает.
@@ -255,7 +271,9 @@
     var err = document.querySelector('[data-err="' + mode + '"]');
     err.textContent = "";
     var fd = new FormData();
-    fd.append("mode", mode);
+    // Экран называется photo, а режимов у него два: сервер должен получить
+    // именно режим, иначе мультяшный аватар молча станет обычным.
+    fd.append("mode", mode === "photo" ? photoMode : mode);
     fd.append("text", document.getElementById(mode + "-text").value);
 
     if (mode === "photo") {
@@ -310,6 +328,15 @@
     var bar = document.getElementById("wait-bar");
     var note = document.getElementById("wait-note");
     var title = document.getElementById("wait-title");
+    var toon = job.mode === "toon";
+
+    // Портрет появляется на середине пути и остаётся до конца: пока идёт
+    // видео — как «уже что-то есть», после — как обложка результата.
+    var poster = document.getElementById("wait-poster");
+    if (job.poster_url && poster.hidden) {
+      document.getElementById("wait-poster-img").src = job.poster_url;
+      poster.hidden = false;
+    }
 
     if (job.status === "queued") {
       title.textContent = "В очереди";
@@ -320,8 +347,14 @@
       return;
     }
     if (job.status === "running") {
-      title.textContent = "Делаю аватара";
-      note.textContent = "Обычно это от тридцати секунд до полутора минут";
+      title.textContent = toon ? "Делаю мультяшного аватара" : "Делаю аватара";
+      if (toon) {
+        note.textContent = job.poster_url
+          ? "Портрет готов, оживляю — ещё около полуминуты"
+          : "Рисую портрет, это секунд двадцать";
+      } else {
+        note.textContent = "Обычно это от тридцати секунд до полутора минут";
+      }
       bar.style.width = Math.max(6, job.progress) + "%";
       return;
     }
@@ -335,6 +368,8 @@
         var v = document.getElementById("wait-video");
         v.src = job.media_url;
         v.hidden = false;
+        // Ролик готов — портрет своё отработал и только занимает экран.
+        document.getElementById("wait-poster").hidden = true;
       }
     } else {
       title.textContent = "Не получилось";
@@ -348,6 +383,7 @@
   document.querySelectorAll("[data-go]").forEach(function (b) {
     b.addEventListener("click", function () {
       var where = b.getAttribute("data-go");
+      if (where === "photo") setPhotoMode(b.getAttribute("data-mode"));
       show(where);
       if (where === "video") refreshInbox();
     });
@@ -363,11 +399,18 @@
   api("/api/state").then(function (state) {
     inbox = state.inbox || { voice: null, video: null };
     armedScreen = false;
+    // Кнопку рисуем, только если сервер сказал, что рисовать есть чем.
+    // Без ключей Kandinsky режим отказал бы уже после нажатия.
+    if (state.toon) document.getElementById("card-toon").hidden = false;
     showInbox();
     if (state.job) { resume(state.job); return; }
-    if (startAt === "photo" || startAt === "video") {
-      show(startAt);
-      if (startAt === "photo") {
+    if (startAt === "photo" || startAt === "toon" || startAt === "video") {
+      var where = startAt === "video" ? "video" : "photo";
+      if (where === "photo") setPhotoMode(startAt);
+      show(where);
+      if (where === "photo") {
+        // Человек вернулся из чата, куда уходил записывать голос, — открываем
+        // сразу ту вкладку, а не «готовые голоса».
         var tab = document.querySelector('[data-voice-tab="chat"]');
         if (tab) tab.click();
       }

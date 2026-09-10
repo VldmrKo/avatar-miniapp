@@ -11,7 +11,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-aiohttp>=1.0"]
+# pytest-asyncio назван явно, хотя его тянет pytest-aiohttp. Он единственный,
+# без кого асинхронные тесты не запускаются вообще — pytest при этом не падает,
+# а честно сообщает про «async def не поддерживается» пятьюдесятью строками,
+# и выглядит это как сломанный код, а не как отсутствующий плагин.
+dev = ["pytest>=8.0", "pytest-aiohttp>=1.0", "pytest-asyncio>=0.23"]
 
 [tool.uv.sources]
 avatar-core = { path = "../avatar-core", editable = true }

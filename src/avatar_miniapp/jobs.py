@@ -37,7 +37,7 @@ DEFAULT_FAIL = "Не получилось сделать ролик. Попро�
 class Job:
     job_id: str
     user_id: int
-    mode: str                     # photo | video
+    mode: str                     # photo | video | toon
     text: str = ""
     status: str = QUEUED
     created_at: float = field(default_factory=time.time)
@@ -47,6 +47,9 @@ class Job:
     provider_job_id: str = ""
     inputs: dict = field(default_factory=dict)   # пути к подготовленным файлам
     media_name: str = ""                          # имя результата в media_dir
+    # Мультяшный портрет: готов на середине пути и показывается в окне,
+    # пока H3 доделывает ролик. Полминуты ожидания превращаются в «о, это я».
+    poster_name: str = ""
     error: str = ""          # техническое, в лог и в файл задачи
     user_message: str = ""   # то, что не стыдно показать человеку
     delivered: bool = False
@@ -59,6 +62,7 @@ class Job:
             "progress": self.progress,
             "waited_s": round((self.finished_at or time.time()) - self.created_at),
             "media_url": f"/media/{self.media_name}" if self.media_name else None,
+            "poster_url": f"/media/{self.poster_name}" if self.poster_name else None,
             "error": self.user_message or ("" if self.status != FAILED else DEFAULT_FAIL),
         }
         if position is not None:

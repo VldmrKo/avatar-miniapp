@@ -171,11 +171,17 @@ class Inbox:
     # человек прислал файл без расширения и по нему не понять, голос это
     # или видео. Плюс делает ответ бота осмысленным, а не общим.
 
-    def arm(self, user_id: int, kind: str) -> None:
+    def arm(self, user_id: int, kind: str, screen: str = "") -> None:
+        """Ждём запись. `screen` — куда вернуть человека кнопкой из чата.
+
+        Экран запоминаем здесь, а не угадываем по виду записи: голос нужен
+        и обычному аватару, и мультяшному, а вернуть человека надо ровно
+        туда, откуда он ушёл записывать.
+        """
         if kind not in KINDS:
             raise ValueError(f"неизвестный вид: {kind}")
         meta = self._meta(user_id)
-        meta["expect"] = {"kind": kind, "at": time.time()}
+        meta["expect"] = {"kind": kind, "at": time.time(), "screen": screen}
         self._dir(user_id).mkdir(parents=True, exist_ok=True)
         self._meta_path(user_id).write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -186,6 +192,13 @@ class Inbox:
         # Полчаса — столько живёт намерение. Дальше это уже другая история.
         if entry and time.time() - float(entry.get("at", 0)) < 1800:
             return str(entry.get("kind") or "")
+        return ""
+
+    def expected_screen(self, user_id: int) -> str:
+        """Экран, с которого ушли записывать. Пусто — значит не знаем."""
+        entry = self._meta(user_id).get("expect") or {}
+        if entry and time.time() - float(entry.get("at", 0)) < 1800:
+            return str(entry.get("screen") or "")
         return ""
 
     def disarm(self, user_id: int) -> None:

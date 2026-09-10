@@ -279,10 +279,15 @@ class ChatSide:
                                  TOO_SHORT_VIDEO if want == VIDEO else TOO_SHORT_VOICE)
                 return
 
+            # Куда возвращать, спрашиваем у inbox: голос нужен и обычному
+            # аватару, и мультяшному, и по виду записи это не различить.
+            back = self.inbox.expected_screen(user_id) or (
+                "video" if want == VIDEO else "photo"
+            )
             self.inbox.disarm(user_id)
             template = GOT_VIDEO if want == VIDEO else GOT_VOICE
             await self._send(chat_id, template.format(seconds=item.seconds),
-                             open_app="video" if want == VIDEO else "photo")
+                             open_app=back)
             return
 
         # Дошли сюда — вложение есть, но не то, что мы умеем брать.

@@ -60,6 +60,10 @@ async def health(request: web.Request) -> web.Response:
         "dev_unsigned": settings.dev_allow_unsigned,
         "chat": bool(chat),
         "bot": getattr(chat, "username", "") if chat else "",
+        # Ключи Kandinsky доехали или нет. Единственный способ проверить это
+        # снаружи: /api/state требует подписи, а health — нет, он и есть
+        # проверка выкладки.
+        "toon": settings.toon_enabled,
         "jobs_active": sum(1 for j in jobs.jobs.values() if j.status in ("queued", "running")),
     })
 
@@ -73,12 +77,17 @@ async def state(request: web.Request) -> web.Response:
     Готовые задачи специально не отдаём: результат уже в чате, а окно человек
     открыл, чтобы сделать следующую.
     """
+    settings: Settings = request.app["settings"]
     jobs: JobManager = request.app["jobs"]
     who = caller_of(request)
     job = jobs.active_of(who.user_id)
     inbox = request.app["inbox"]
     return web.json_response({
         "name": who.display_name,
+        # Без ключей Kandinsky мультяшный режим не работает. Окно узнаёт об
+        # этом здесь и просто не рисует кнопку: лучше её отсутствие, чем
+        # кнопка, которая гарантированно приведёт к отказу.
+        "toon": settings.toon_enabled,
         "job": job.public(jobs.position_of(job)) if job else None,
         # Что человек уже прислал боту в чат. Окно не умеет ни писать голос,
         # ни снимать видео — этим занимается сам мессенджер.
@@ -106,11 +115,16 @@ async def expect(request: web.Request) -> web.Response:
     kind = str(body.get("kind") or "")
     if kind not in ("voice", "video") or not inbox:
         return web.json_response({"error": "неизвестный вид записи"}, status=400)
+    # Экран, с которого ушли: голос нужен и обычному аватару, и мультяшному,
+    # а кнопка из чата должна вернуть ровно туда, откуда человек ушёл.
+    screen = str(body.get("screen") or "")
+    if screen not in ("photo", "video", "toon"):
+        screen = ""
     # «Записать заново» значит именно заново: старую запись убираем сразу.
     # Иначе человек передумает записывать, нажмёт «Сделать аватара» и молча
     # получит ролик по прошлому голосу.
     inbox.clear(who.user_id, kind)
-    inbox.arm(who.user_id, kind)
+    inbox.arm(who.user_id, kind, screen)
     return web.json_response({"ok": True})
 
 
@@ -135,15 +149,20 @@ async def create(request: web.Request) -> web.Response:
             max_size=MAX_UPLOAD_MB * 1024 * 1024, actual_size=request.content_length
         )
 
+    settings: Settings = request.app["settings"]
     mode, text, files = await _read_form(request)
-    if mode not in ("photo", "video"):
+    if mode not in ("photo", "video", "toon"):
         return web.json_response({"error": "неизвестный режим"}, status=400)
+    if mode == "toon" and not settings.toon_enabled:
+        return web.json_response(
+            {"error": "мультяшный аватар сейчас недоступен"}, status=503
+        )
 
     # Голос и видео могли приехать не через окно, а голосовым или роликом
     # боту в чат — для MAX это единственный способ что-то записать.
     inbox = request.app["inbox"]
     if inbox:
-        if mode == "photo" and not files.get("voice") and not files.get("voice_id"):
+        if mode in ("photo", "toon") and not files.get("voice") and not files.get("voice_id"):
             item = inbox.get(who.user_id, "voice")
             if item:
                 files["voice"] = str(item.path)

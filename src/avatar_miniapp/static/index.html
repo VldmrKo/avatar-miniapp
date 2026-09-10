@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Аватар</title>
-<link rel="stylesheet" href="/static/style.css?v=6">
+<link rel="stylesheet" href="/static/style.css?v=7">
 <!-- Мост MAX. Именно он создаёт window.WebApp, откуда берётся подписанный
      initData. Без этой строки страница открывается, но подписи у неё нет,
      и сервер честно отвечает 401 на каждый запрос. Грузим синхронно и до
@@ -21,26 +21,30 @@
   <h1>Аватар</h1>
   <p class="lead">Сделаю говорящего аватара по вашему фото или видео.</p>
 
-  <button class="card" data-go="photo">
+  <button class="card" data-go="photo" data-mode="toon" id="card-toon" hidden>
+    <span class="ico">🎨</span>
+    <span class="body"><b>Cartoon avatar</b><small>нарисую по фото и оживлю</small></span>
+  </button>
+
+  <button class="card" data-go="photo" data-mode="photo">
     <span class="ico">🖼️</span>
     <span class="body"><b>Аватар по фото</b><small>фото, голос и текст</small></span>
   </button>
 
-  <button class="card" data-go="video">
+  <button class="card" data-go="video" data-mode="video">
     <span class="ico">🎬</span>
     <span class="body"><b>Аватар по видео</b><small>видео и текст, голос возьму из видео</small></span>
   </button>
-
-  <button class="card soon" disabled>
-    <span class="ico">🧑‍🎤</span>
-    <span class="body"><b>Выбрать персонажа</b><small>готовые образы</small></span>
-    <span class="badge">скоро</span>
-  </button>
 </section>
 
-<!-- аватар по фото -->
+<!-- Аватар по фото и мультяшный — один экран: вход у них одинаковый (фото,
+     голос, реплика), различается только то, что происходит на сервере.
+     Два экрана означали бы две копии блока голоса с одинаковыми id — а он
+     самый сложный кусок окна, и разъехались бы они на первой же правке. -->
 <section id="photo" class="screen">
-  <h2>Аватар по фото</h2>
+  <h2 id="photo-title">Аватар по фото</h2>
+  <p class="lead" id="toon-lead" hidden>Сначала нарисую вас в мультяшном
+    стиле, потом оживлю — скажу вашим голосом то, что напишете.</p>
 
   <label class="field">
     <span class="label">Фото лица</span>
@@ -62,9 +66,14 @@
       <!-- Микрофон вебвью MAX странице не отдаёт: getUserMedia падает
            с NotAllowedError ещё до вопроса о разрешении. Зато сам
            мессенджер записывает голосовые прекрасно — ими и пользуемся. -->
-      <p class="hint">Запись — через бота: окну MAX микрофон не даёт.
-        Голосовые до бота не доходят, поэтому запишите короткий ролик —
-        голос я возьму из него.</p>
+      <!-- Инструкция дословная и с готовой фразой. Человек, которому просто
+           сказали «запишите голос», встаёт в ступор на вопросе «а что
+           говорить» — и записывает две секунды мычания. -->
+      <p class="hint">Запись — через бота: окну MAX микрофон не даёт,
+        а голосовые до бота не доходят. Поэтому <b>снимите короткое
+        видео на 4–7 секунд</b> и в тишине произнесите:
+        <br><b>«Это мой образец голоса для аватара»</b>.
+        <br>Голос я возьму оттуда, само видео не понадобится.</p>
       <div id="voice-slot" class="slot" hidden>
         <span class="slot-text"></span>
         <button class="slot-x" data-drop="voice" title="удалить запись">×</button>
@@ -72,13 +81,15 @@
       <button class="wide" id="voice-record">Записать голос</button>
       <div id="voice-armed" class="statusline" hidden>
         Жду вашу запись. Нажмите «назад» — окно закроется. Снимите боту
-        короткий ролик, секунд на пять, где вы говорите. Я возьму оттуда
-        голос и напишу в чат.
+        видео на 4–7 секунд и скажите в тишине:
+        «Это мой образец голоса для аватара».
+        Я возьму оттуда голос и напишу в чат.
       </div>
     </div>
     <div class="tabbody" data-voice-body="file">
       <input type="file" id="voice-file" accept="audio/*">
-      <div class="hint">2–15 секунд чистой речи, без музыки.</div>
+      <div class="hint">4–7 секунд чистой речи, без музыки и посторонних
+        звуков. Подойдёт и дорожка из видео.</div>
     </div>
   </div>
 
@@ -88,7 +99,7 @@
     <div class="counter" data-counter="photo-text">&nbsp;</div>
   </label>
 
-  <button class="go" data-submit="photo">Сделать аватара</button>
+  <button class="go" data-submit="photo" id="photo-go">Сделать аватара</button>
   <div class="err" data-err="photo"></div>
 </section>
 
@@ -105,12 +116,15 @@
     <button class="wide" id="video-record">Записать видео</button>
     <div id="video-armed" class="statusline" hidden>
       Жду ваше видео. Нажмите «назад» — окно закроется, снимите ролик
-      и отправьте его боту. Как приму, пришлю кнопку обратно сюда.
+      на 4–7 секунд, где вы говорите, и отправьте его боту.
+      Как приму, пришлю кнопку обратно сюда.
     </div>
     <label class="wide filebtn">Выбрать готовое видео
       <input type="file" id="video-file" accept="video/*" hidden>
     </label>
-    <div class="hint">Возьму отрезок с речью до 15 секунд и голос оттуда же.</div>
+    <div class="hint">Снимите 4–7 секунд, где вы говорите в тишине —
+      например «Это мой образец голоса для аватара». Возьму оттуда
+      и внешность, и голос.</div>
   </div>
 
   <label class="field">
@@ -133,9 +147,16 @@
     Окно можно закрыть — результат придёт в чат.<br>
     Если оставите открытым, покажу здесь.
   </p>
+  <!-- Мультяшный портрет готов на середине пути. Показываем сразу: полминуты
+       ожидания с картинкой себя переносятся совсем не так, как полминуты
+       полоски прогресса. -->
+  <figure id="wait-poster" hidden>
+    <img id="wait-poster-img" alt="ваш мультяшный портрет">
+    <figcaption>Портрет готов, оживляю</figcaption>
+  </figure>
   <video id="wait-video" controls playsinline hidden></video>
 </section>
 
-<script src="/static/app.js?v=6"></script>
+<script src="/static/app.js?v=7"></script>
 </body>
 </html>

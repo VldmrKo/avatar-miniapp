@@ -20,6 +20,7 @@ from avatar_core.config import ProviderSettings
 from avatar_core.errors import AvatarError
 from avatar_core.models import JobSpec, JobStatus
 from avatar_core.providers.h3 import H3Provider
+from avatar_core.toonify import Toonify
 
 from . import prepare, text
 from .config import Settings
@@ -29,6 +30,10 @@ log = logging.getLogger("miniapp.generate")
 
 # Вертикаль под мессенджер. У Kandinsky она недостижима, у H3 — штатный пресет.
 ASPECT = "9:16"
+
+# Мультяшный режим идёт в два шага, и человеку это видно по прогрессу:
+# сначала Kandinsky рисует портрет (15–25 с), потом H3 его оживляет (~30 с).
+TOON_DRAWN = 40
 
 
 def provider_settings(settings: Settings) -> ProviderSettings:
@@ -54,6 +59,47 @@ def provider_settings(settings: Settings) -> ProviderSettings:
     )
 
 
+def toonify_settings(settings: Settings) -> Toonify:
+    """Клиент к Kandinsky I2I. Ключи те же, что и у всего остального."""
+    return Toonify(
+        settings.kandinsky_base_url,
+        settings.kandinsky_api_key,
+        poll_interval_s=3.0,
+        # Замеры на корзинке из восьми лиц: 13–25 с на картинку, но первые
+        # задачи после простоя ждали очереди по две минуты. Пять минут —
+        # с запасом, и всё равно меньше, чем ждёт человек у H3.
+        poll_timeout_s=300.0,
+        logger=log,
+    )
+
+
+def draw_toon(settings: Settings, job: Job, face: Path, dest: Path) -> Path:
+    """Фото → рисованный портрет. Первый шаг мультяшного режима.
+
+    Отказ Kandinsky отделяем от отказа H3 намеренно: это разные сервисы,
+    и «не смог нарисовать» лечится не тем же, чем «не смог оживить».
+    """
+    if settings.use_stub:
+        # Тот же путь, что и у остальной заглушки: без ключей отлаживаем
+        # окно и чат, не тратя генерации. Портретом становится само фото.
+        import shutil
+
+        shutil.copyfile(face, dest)
+        return dest
+    client = toonify_settings(settings)
+    try:
+        client.run(face, dest, text.TOON_STYLE, label=job.job_id)
+    except AvatarError as exc:
+        log.error("%s: Kandinsky не нарисовал: %s", job.job_id, exc)
+        raise UserError(
+            "Не получилось нарисовать аватар по этому фото. "
+            "Попробуйте другое — лучше всего портрет анфас при ровном свете."
+        ) from exc
+    finally:
+        client.close()
+    return dest
+
+
 def make_runner(settings: Settings):
     """Замыкание с настройками — то, что кладётся в JobManager."""
 
@@ -65,11 +111,22 @@ def make_runner(settings: Settings):
         audios: list[Asset] = []
         videos: list[Asset] = []
 
-        if job.mode == "photo":
+        if job.mode in ("photo", "toon"):
             src = job.inputs.get("photo")
             if not src:
                 raise prepare.PrepareError("Не пришло фото.")
-            images.append(Asset(prepare.prepare_photo(Path(src), work / "face.png"), IMAGE))
+            face = prepare.prepare_photo(Path(src), work / "face.png")
+            if job.mode == "toon":
+                # Рисунок кладём в media_dir, а не в work: work удаляется
+                # после генерации, а портрет надо показать в окне, пока
+                # H3 ещё работает.
+                drawn = settings.media_dir / f"{job.job_id}_toon.png"
+                draw_toon(settings, job, face, drawn)
+                job.poster_name = drawn.name
+                job.progress = TOON_DRAWN
+                log.info("%s: портрет готов, оживляю", job.job_id)
+                face = drawn
+            images.append(Asset(face, IMAGE))
 
             voice_id = job.inputs.get("voice_id")
             voice_file = job.inputs.get("voice")
@@ -120,7 +177,7 @@ def make_runner(settings: Settings):
             # Корзину проверяем ДО отправки: лучше внятный отказ здесь,
             # чем таймаут на восьмидесяти мегабайтах base64.
             provider.validate(spec, strict=True)
-            job.progress = 10
+            job.progress = max(job.progress, 10)
             result = provider.run(spec, work)
             if result.status is not JobStatus.DONE or not result.output_path:
                 raise AvatarError(result.error or "Модель не вернула ролик")

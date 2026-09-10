@@ -31,6 +31,11 @@ class Settings:
     webapp_url: str = ""
     h3_base_url: str = ""
     h3_api_key: str = ""
+    # Kandinsky нужен только мультяшному режиму: он рисует аватар по фото,
+    # а оживляет его всё тот же H3. Пусто — режим просто не предлагается,
+    # остальные два работают как работали.
+    kandinsky_base_url: str = ""
+    kandinsky_api_key: str = ""
     ffmpeg: str = "ffmpeg"
     # Заглушка вместо модели: весь путь окно ↔ чат отлаживается без единой
     # потраченной генерации. Боевой режим включается сам, как только есть
@@ -85,6 +90,15 @@ class Settings:
     def media_dir(self) -> Path:
         return self.data_dir / "media"
 
+    @property
+    def toon_enabled(self) -> bool:
+        """Мультяшный режим доступен, только если есть чем рисовать.
+
+        Проверяем здесь, а не в окне: окно должно узнавать об этом с сервера,
+        иначе кнопка будет вести на экран, который гарантированно откажет.
+        """
+        return bool(self.kandinsky_base_url and self.kandinsky_api_key) or self.use_stub
+
     def ensure_dirs(self) -> None:
         for path in (self.jobs_dir, self.media_dir, self.voices_dir, self.inbox_dir):
             path.mkdir(parents=True, exist_ok=True)
@@ -102,6 +116,8 @@ def load(env_file: str | os.PathLike[str] | None = None) -> Settings:
         data_dir=Path(values.get("MINIAPP_DATA_DIR") or (APP_DIR.parents[1] / "data")),
         h3_base_url=values.get("H3_BASE_URL", ""),
         h3_api_key=values.get("H3_API_KEY", ""),
+        kandinsky_base_url=values.get("KANDINSKY_BASE_URL", ""),
+        kandinsky_api_key=values.get("KANDINSKY_TOKEN", ""),
         ffmpeg=values.get("MINIAPP_FFMPEG", "ffmpeg"),
         use_stub=_flag(values, "MINIAPP_USE_STUB", False),
         dev_allow_unsigned=_flag(values, "MINIAPP_DEV_ALLOW_UNSIGNED", False),
@@ -125,6 +141,11 @@ def load(env_file: str | os.PathLike[str] | None = None) -> Settings:
             "настоящих роликов не будет."
         )
         settings.use_stub = True
+    if not settings.toon_enabled:
+        settings.warnings.append(
+            "KANDINSKY_BASE_URL или KANDINSKY_TOKEN пусты — мультяшный аватар "
+            "недоступен, кнопка в окне не появится."
+        )
     # Токен, который «работает на ноутбуке и не работает на сервере», почти
     # всегда попорчен при переносе. Ловим это до первого запроса к MAX.
     token = settings.bot_token

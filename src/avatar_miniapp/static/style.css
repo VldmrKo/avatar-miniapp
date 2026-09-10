@@ -79,6 +79,12 @@ textarea{width:100%;font:inherit;padding:11px;border:1px solid var(--line);
        transition:width .4s ease;border-radius:99px}
 #wait{text-align:center;padding-top:8vh}
 #wait-video{width:100%;margin-top:18px;border-radius:14px}
+/* Портрет на экране ожидания. Ограничен по высоте: он вертикальный, и на
+   маленьком экране без этого уезжает всё остальное, включая прогресс. */
+#wait-poster{margin:18px 0 0}
+#wait-poster img{max-width:100%;max-height:46vh;border-radius:14px;display:block;
+                 margin:0 auto}
+#wait-poster figcaption{color:var(--muted);font-size:13px;margin-top:8px}
 
 .spin{width:26px;height:26px;border:3px solid var(--line);border-top-color:var(--accent);
       border-radius:50%;animation:spin 1s linear infinite;margin:0 auto}

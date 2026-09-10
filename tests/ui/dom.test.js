@@ -137,6 +137,61 @@ function visible(d, id) {
     w.close();
   }
 
+  // --- 7. мультяшный режим на том же экране --------------------------------
+  // Экран photo обслуживает два режима, и перепутать их легко: разметка
+  // одна, а на сервер должно уехать разное. Проверяем оба направления.
+  {
+    const { w, d } = makeWindow({
+      name: "Аня", job: null, toon: true, inbox: { voice: null, video: null },
+    });
+    await settled();
+    check("кнопка мультяшного видна, когда сервер её разрешил", visible(d, "card-toon"));
+
+    d.getElementById("card-toon").click();
+    check("открылся экран photo", d.getElementById("photo").classList.contains("on"));
+    check("заголовок сменился",
+      d.getElementById("photo-title").textContent === "Cartoon avatar",
+      d.getElementById("photo-title").textContent);
+    check("появилось пояснение про рисовку", visible(d, "toon-lead"));
+    check("подпись кнопки сменилась",
+      d.getElementById("photo-go").textContent === "Нарисовать и оживить");
+
+    // Возврат на обычный режим должен всё вернуть: иначе человек, заглянувший
+    // в мультяшный и передумавший, молча получит мультяшного.
+    d.querySelector('[data-mode="photo"]').click();
+    check("заголовок вернулся",
+      d.getElementById("photo-title").textContent === "Аватар по фото");
+    check("пояснение спряталось", !visible(d, "toon-lead"));
+    w.close();
+  }
+
+  // --- 8. без ключей Kandinsky кнопки нет -----------------------------------
+  {
+    const { w, d } = makeWindow({
+      name: "Аня", job: null, toon: false, inbox: { voice: null, video: null },
+    });
+    await settled();
+    check("кнопка мультяшного скрыта, когда рисовать нечем", !visible(d, "card-toon"));
+    w.close();
+  }
+
+  // --- 9. портрет показывается, пока идёт видео ------------------------------
+  {
+    const { w, d } = makeWindow({
+      name: "Аня", inbox: { voice: null, video: null },
+      job: { job_id: "t1", mode: "toon", status: "running", progress: 40,
+             poster_url: "/media/t1_toon.png", media_url: null, error: "" },
+    });
+    await settled();
+    check("портрет показан", visible(d, "wait-poster"));
+    check("картинка подставлена",
+      d.getElementById("wait-poster-img").getAttribute("src") === "/media/t1_toon.png");
+    check("подсказка про второй шаг",
+      d.getElementById("wait-note").textContent.indexOf("оживляю") >= 0,
+      d.getElementById("wait-note").textContent);
+    w.close();
+  }
+
   if (failures.length) {
     console.error("ПРОВАЛЫ:\n  " + failures.join("\n  "));
     process.exit(1);

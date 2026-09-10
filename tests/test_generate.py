@@ -246,3 +246,118 @@ async def test_model_error_is_not_leaked_to_the_person(tmp_path, h3, media):
         generate.provider_settings = original
     assert "CUDA" not in str(caught.value)
     assert "попробуйте" in str(caught.value).lower()
+
+
+# --- мультяшный аватар -------------------------------------------------------
+# Режим идёт в два шага: Kandinsky рисует портрет, H3 его оживляет. Проверяем
+# именно стык — что в модель уехал РИСУНОК, а не исходное фото, и что отказ
+# рисовалки отделён от отказа оживлялки.
+
+class FakeKandinsky:
+    """Три ручки Kandinsky I2I и запомненный промпт рисовки."""
+
+    def __init__(self, png: bytes) -> None:
+        self.png = png
+        self.payload: dict = {}
+        self.fail = False
+        self.app = web.Application(client_max_size=200 * 1024 * 1024)
+        self.app.router.add_post("/tasks/k6-i2i", self.submit)
+        self.app.router.add_get("/tasks/{tid}", self.poll)
+        self.app.router.add_get("/tasks/{tid}/result", self.result)
+
+    async def submit(self, request: web.Request) -> web.Response:
+        self.payload = await request.json()
+        return web.json_response({"task_id": "toon-1"})
+
+    async def poll(self, request: web.Request) -> web.Response:
+        if self.fail:
+            return web.json_response({"status": "failed"})
+        return web.json_response({"status": "done"})
+
+    async def result(self, request: web.Request) -> web.Response:
+        return web.Response(body=self.png, content_type="image/png")
+
+
+@pytest.fixture
+async def kandinsky(tmp_path):
+    from PIL import Image
+
+    drawn = tmp_path / "drawn.png"
+    # Заметно другая картинка, чем исходное фото: так видно, что в H3 уехал
+    # именно результат рисовки, а не то, что прислал человек.
+    Image.new("RGB", (512, 640), (240, 200, 60)).save(drawn)
+    fake = FakeKandinsky(drawn.read_bytes())
+    runner = web.AppRunner(fake.app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    fake.url = f"http://127.0.0.1:{runner.addresses[0][1]}"
+    yield fake
+    await runner.cleanup()
+
+
+def toon_settings(tmp_path, h3_url: str, kandinsky_url: str) -> Settings:
+    s = Settings(data_dir=tmp_path / "data", h3_base_url=h3_url, h3_api_key="k",
+                 kandinsky_base_url=kandinsky_url, kandinsky_api_key="k")
+    s.ensure_dirs()
+    return s
+
+
+async def test_toon_draws_first_then_animates(tmp_path, h3, kandinsky, media):
+    from PIL import Image
+
+    photo, voice = media
+    settings = toon_settings(tmp_path, h3.url, kandinsky.url)
+    job = Job(job_id="t1", user_id=7, mode="toon", text="Вот это круто!",
+              inputs={"photo": str(photo), "voice": str(voice)})
+
+    await generate.make_runner(settings)(job)
+
+    # Рисовка получила наш зашитый промпт, и без переписывания на стороне
+    # сервиса: промпт в продукте один на всех, значит и вести себя должен
+    # одинаково от запуска к запуску.
+    assert kandinsky.payload["params"]["beautificator"] == "disabled"
+    assert "рисованный аватар" in kandinsky.payload["params"]["query"]
+
+    # Портрет лежит рядом с роликом и переживает уборку work: окно показывает
+    # его, пока H3 ещё считает.
+    poster = settings.media_dir / job.poster_name
+    assert job.poster_name == "t1_toon.png"
+    assert poster.is_file()
+    assert Image.open(poster).size == (512, 640)
+
+    # И главное: в H3 уехал рисунок, а не исходное фото.
+    import base64
+    import io
+
+    sent = base64.b64decode(h3.payload["reference_images"][0].split(",", 1)[-1])
+    assert Image.open(io.BytesIO(sent)).getpixel((10, 10))[0] > 200
+
+    # Описание стиля обязано быть внутри [Shot 1]: снаружи модель его
+    # игнорирует и тянет рисунок обратно в фотографию (exp7).
+    prompt = h3.payload["prompt"]
+    shot = prompt.split("[Shot 1]", 1)[1].split("(S1) говорит", 1)[0]
+    assert "векторная иллюстрация" in shot
+
+
+async def test_toon_failure_blames_the_drawing_step(tmp_path, h3, kandinsky, media):
+    """Не смог нарисовать и не смог оживить — разные беды и разные советы."""
+    photo, voice = media
+    kandinsky.fail = True
+    settings = toon_settings(tmp_path, h3.url, kandinsky.url)
+    with pytest.raises(UserError) as caught:
+        await generate.make_runner(settings)(Job(
+            job_id="t2", user_id=7, mode="toon", text="Привет!",
+            inputs={"photo": str(photo), "voice": str(voice)},
+        ))
+    assert "нарисовать" in str(caught.value).lower()
+
+
+async def test_toon_prompt_differs_from_plain_photo():
+    """Обычный аватар не должен нечаянно получить стилевую строку."""
+    from avatar_miniapp import text
+
+    plain, _ = text.build("Привет!", "photo")
+    toon, _ = text.build("Привет!", "toon")
+    assert "векторная иллюстрация" in toon
+    assert "векторная иллюстрация" not in plain
