@@ -55,11 +55,8 @@ async def make_client(settings: Settings, runner) -> tuple[TestClient, JobManage
         jobs.mark_delivered(job)
 
     jobs.set_delivery(deliver)
-    from avatar_miniapp.inbox import Inbox
-
     app = build_app(settings, jobs,
-                    lambda: [{"id": "anya", "title": "Аня", "note": ""}],
-                    Inbox(settings.inbox_dir))
+                    lambda: [{"id": "anya", "title": "Аня", "note": ""}])
     app.on_startup.append(lambda _: jobs.start())
     app.on_cleanup.append(lambda _: jobs.stop())
     client = TestClient(TestServer(app))
@@ -197,62 +194,6 @@ async def test_unfinished_job_survives_restart(settings):
         assert fresh.active_of(777) is not None
     finally:
         await fresh.stop()
-
-
-@pytest.mark.asyncio
-async def test_recording_from_chat_is_used_as_input(settings):
-    """Голосовое прислано боту — окно ничего не грузит, файл берётся оттуда."""
-    from avatar_miniapp.inbox import VOICE, Inbox
-
-    box = Inbox(settings.inbox_dir)
-    box.put(777, VOICE, b"x" * 4096, ".ogg")
-
-    jobs = JobManager(settings.jobs_dir, _quick, concurrency=1)
-    jobs.set_delivery(lambda job: asyncio.sleep(0))
-    app = build_app(settings, jobs, lambda: [], box)
-    app.on_startup.append(lambda _: jobs.start())
-    app.on_cleanup.append(lambda _: jobs.stop())
-    client = TestClient(TestServer(app))
-    await client.start_server()
-    try:
-        from aiohttp import FormData
-
-        fd = FormData()
-        fd.add_field("mode", "photo")
-        fd.add_field("text", "Привет!")
-        fd.add_field("photo", b"\x00" * 32, filename="face.png")
-        created = await (await client.post("/api/avatar", data=fd, headers=headers())).json()
-        job = jobs.get(created["job_id"])
-        assert job.inputs["voice"].endswith("voice.ogg")
-    finally:
-        await client.close()
-
-
-@pytest.mark.asyncio
-async def test_expect_and_drop_through_api(settings):
-    from avatar_miniapp.inbox import VOICE, Inbox
-
-    box = Inbox(settings.inbox_dir)
-    jobs = JobManager(settings.jobs_dir, _quick, concurrency=1)
-    app = build_app(settings, jobs, lambda: [], box)
-    client = TestClient(TestServer(app))
-    await client.start_server()
-    try:
-        r = await client.post("/api/inbox/expect", json={"kind": "voice"},
-                              headers=headers())
-        assert r.status == 200
-        state = await (await client.get("/api/state", headers=headers())).json()
-        assert state["inbox"]["expect"] == "voice"
-
-        box.put(777, VOICE, b"x" * 4096, ".ogg")
-        state = await (await client.get("/api/state", headers=headers())).json()
-        assert state["inbox"]["voice"] is not None
-
-        assert (await client.delete("/api/inbox/voice", headers=headers())).status == 200
-        state = await (await client.get("/api/state", headers=headers())).json()
-        assert state["inbox"]["voice"] is None
-    finally:
-        await client.close()
 
 
 @pytest.mark.asyncio

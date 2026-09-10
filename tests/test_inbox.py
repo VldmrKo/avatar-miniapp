@@ -1,18 +1,20 @@
-"""Приём голоса и видео из чата.
+"""Разбор вложения, пришедшего боту в чат.
 
-Окну MAX не даёт ни микрофон, ни камеру в режиме видео, поэтому запись
-идёт через сам мессенджер. Здесь проверяется разбор вложения (на нём мы
-уже один раз споткнулись вживую) и жизнь записи после приёма.
+Раньше здесь проверялся ещё и склад: окно заказывало запись боту, бот
+складывал файл, окно его забирало. Этого пути больше нет — свой голос
+целиком делается в переписке, — и от модуля осталось ровно то, без чего
+не разобрать входящий файл.
+
+А разбирать приходится, и на этом мы уже спотыкались вживую: MAX отдаёт
+и голосовое, и видео одинаково — типом `file` и ссылкой `getfile?rq=...`,
+без расширения и без подсказок в типе.
 """
 
 from __future__ import annotations
 
-import json
-import time
-
 import pytest
 from avatar_miniapp.chat import ChatSide, suffix_of
-from avatar_miniapp.inbox import VIDEO, VOICE, Inbox
+from avatar_miniapp.inbox import VIDEO, VOICE, Attachments
 
 
 class FakeType:
@@ -68,80 +70,7 @@ def test_suffix_of(url, fallback, expected):
     assert suffix_of(url, fallback) == expected
 
 
-def test_put_and_get(tmp_path):
-    box = Inbox(tmp_path)
-    item = box.put(7, VOICE, b"x" * 1000, ".ogg")
-    assert item.path.is_file()
-    again = box.get(7, VOICE)
-    assert again is not None and again.path == item.path
-
-
-def test_new_recording_replaces_the_old(tmp_path):
-    """Один последний файл на вид: копить чужие записи незачем."""
-    box = Inbox(tmp_path)
-    box.put(7, VOICE, b"a" * 100, ".ogg")
-    box.put(7, VOICE, b"b" * 100, ".m4a")
-    files = sorted(p.name for p in (tmp_path / "7").glob("voice.*"))
-    assert files == ["voice.m4a"]
-    assert box.get(7, VOICE).path.read_bytes() == b"b" * 100
-
-
-def test_stale_recording_is_not_offered(tmp_path):
-    """Вчерашняя запись — почти наверняка не та, что имеют в виду сегодня."""
-    box = Inbox(tmp_path)
-    box.put(7, VOICE, b"x" * 100, ".ogg")
-    meta_path = tmp_path / "7" / "meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    meta[VOICE]["at"] = time.time() - 48 * 3600
-    meta_path.write_text(json.dumps(meta), encoding="utf-8")
-    assert box.get(7, VOICE) is None
-
-
-def test_people_do_not_see_each_other(tmp_path):
-    box = Inbox(tmp_path)
-    box.put(7, VOICE, b"x" * 100, ".ogg")
-    assert box.get(8, VOICE) is None
-
-
-def test_expect_is_remembered_and_cleared(tmp_path):
-    box = Inbox(tmp_path)
-    assert box.expected(7) == ""
-    box.arm(7, VIDEO)
-    assert box.expected(7) == VIDEO
-    box.disarm(7)
-    assert box.expected(7) == ""
-
-
-def test_expect_does_not_outlive_the_intent(tmp_path):
-    box = Inbox(tmp_path)
-    box.arm(7, VOICE)
-    meta_path = tmp_path / "7" / "meta.json"
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    meta["expect"]["at"] = time.time() - 7200
-    meta_path.write_text(json.dumps(meta), encoding="utf-8")
-    assert box.expected(7) == ""
-
-
-def test_clear_removes_the_file(tmp_path):
-    box = Inbox(tmp_path)
-    item = box.put(7, VOICE, b"x" * 100, ".ogg")
-    box.clear(7, VOICE)
-    assert not item.path.exists()
-    assert box.get(7, VOICE) is None
-
-
-def test_public_shape(tmp_path):
-    box = Inbox(tmp_path)
-    box.put(7, VOICE, b"x" * 100, ".ogg")
-    body = box.public(7)
-    assert body["video"] is None
-    assert body["voice"]["name"] == "voice.ogg"
-    assert "expect" in body
-
-
 # --- опознание содержимого ---------------------------------------------------
-# MAX отдаёт и голосовое, и видео как `file` со ссылкой getfile?rq=... —
-# ни расширения, ни подсказки в типе. Гадали по имени и ошибались.
 
 def _make(tmp_path, name, args):
     import subprocess
@@ -152,7 +81,7 @@ def _make(tmp_path, name, args):
 
 
 def test_sniff_tells_voice_from_video(tmp_path):
-    box = Inbox(tmp_path / "box")
+    box = Attachments()
     voice = _make(tmp_path, "v.ogg", ["-f", "lavfi", "-i", "sine=f=220:d=3", "-c:a", "libopus"])
     clip = _make(tmp_path, "c.mp4", [
         "-f", "lavfi", "-i", "testsrc=s=160x120:d=3",
@@ -163,15 +92,26 @@ def test_sniff_tells_voice_from_video(tmp_path):
     assert box.sniff(clip, "") == VIDEO
 
 
-def test_sniff_gives_up_quietly_on_garbage(tmp_path):
+def test_sniff_gives_up_quietly_on_garbage():
     """Пустая строка значит «не знаю» — вызывающий решит сам."""
-    box = Inbox(tmp_path / "box")
-    assert box.sniff(b"not a media file at all", "") == ""
+    assert Attachments().sniff(b"not a media file at all", "") == ""
+
+
+def test_seconds_measures_the_clip(tmp_path):
+    """По длительности решается «слишком короткая запись» — до генерации,
+    а не после отказа модели."""
+    box = Attachments()
+    voice = _make(tmp_path, "v.ogg", ["-f", "lavfi", "-i", "sine=f=220:d=3", "-c:a", "libopus"])
+    assert 2.5 < box.seconds(voice, ".ogg") < 3.5
+
+
+def test_seconds_of_garbage_is_zero():
+    assert Attachments().seconds(b"not a media file at all", "") == 0.0
 
 
 def test_audio_from_video(tmp_path):
     """Голосовые до бота не доезжают, а видео доезжает — берём звук оттуда."""
-    box = Inbox(tmp_path / "box")
+    box = Attachments()
     clip = _make(tmp_path, "c.mp4", [
         "-f", "lavfi", "-i", "testsrc=s=160x120:d=4",
         "-f", "lavfi", "-i", "sine=f=300:d=4",
@@ -183,44 +123,9 @@ def test_audio_from_video(tmp_path):
 
 
 def test_audio_from_silent_video_is_empty(tmp_path):
-    box = Inbox(tmp_path / "box")
+    box = Attachments()
     mute = _make(tmp_path, "s.mp4", [
         "-f", "lavfi", "-i", "testsrc=s=160x120:d=3",
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
     ])
     assert box.audio_from(mute, ".mp4") == b""
-
-
-# --- чем вернуть человека в приложение ---------------------------------------
-
-def _chat(webapp="https://kandiavatar.duckdns.org", username="se14180200_bot"):
-    from avatar_miniapp.chat import ChatSide
-
-    chat = ChatSide.__new__(ChatSide)
-    chat.webapp_url = webapp
-    chat.username = username
-    chat._good_way = ""
-    return chat
-
-
-def test_deep_link_is_the_last_resort():
-    """MAX может не найти адрес в реестре — тогда остаётся обычная ссылка."""
-    ways = _chat()._ways_back("photo")
-    names = [name for name, _ in ways]
-    assert any("приложение" in n for n in names)
-    assert names[-1].startswith("ссылка https://max.ru/se14180200_bot?startapp=photo")
-
-
-def test_without_username_only_the_app_button():
-    ways = _chat(username="")._ways_back("video")
-    assert all("ссылка" not in name for name, _ in ways)
-
-
-def test_without_anything_there_is_no_button():
-    assert _chat(webapp="", username="")._ways_back("photo") == []
-
-
-def test_slash_variants_are_not_duplicated():
-    ways = _chat(webapp="https://x/")._ways_back("photo")
-    urls = [n for n, _ in ways if n.startswith("приложение")]
-    assert len(urls) == len(set(urls))

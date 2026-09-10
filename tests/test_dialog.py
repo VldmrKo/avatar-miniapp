@@ -228,9 +228,11 @@ async def test_no_presets_still_offers_own_voice(tmp_path):
 
 
 # --- кто получает вложение ---------------------------------------------------
-# Самое опасное место интеграции: одно и то же видео может быть ответом
-# сценарию в переписке ИЛИ записью для окна мини-аппа. Перепутать — значит
-# у человека, нажавшего в окне «записать», молча уедет ролик не туда.
+# Адресат теперь ровно один — сценарий в переписке. Раньше вложения ждало
+# ещё и окно, и споры между ними стоили нам живого бага: висящее с прошлого
+# захода «жду запись» съедало первый же шаг разговора. Путь через окно
+# убран целиком, и проверяем мы теперь не приоритет, а что вложение не
+# теряется и не уходит в пустоту.
 
 class Recorder:
     """Сценарий-пустышка: только запоминает, что ему отдали."""
@@ -244,6 +246,7 @@ class Recorder:
 
     async def on_file(self, chat_id, user_id, kind, data, suffix):
         self.got.append((kind, suffix, len(data)))
+        return True
 
     async def on_text(self, chat_id, user_id, text):
         return False
@@ -252,23 +255,20 @@ class Recorder:
         self.got.append(("menu", "", 0))
 
 
-def _chat(tmp_path, conversation):
+def _chat(conversation, media=None):
     from avatar_miniapp.chat import ChatSide
-    from avatar_miniapp.inbox import Inbox
 
     chat = ChatSide.__new__(ChatSide)
-    chat.inbox = Inbox(tmp_path / "inbox")
     chat.conversation = conversation
+    chat.media = media or _Media()
     chat.webapp_url = ""
     chat.username = ""
-    chat._good_way = ""
-    chat._state_path = None
     chat.said = []
 
     async def download(url):
         return b"x" * 32
 
-    async def send(chat_id, text, open_app=""):
+    async def send(chat_id, text):
         chat.said.append(text)
 
     chat._download = download
@@ -276,37 +276,58 @@ def _chat(tmp_path, conversation):
     return chat
 
 
-async def test_photo_goes_to_the_conversation(tmp_path):
+class _Media:
+    """ffmpeg в этих тестах не нужен: разбор содержимого проверяется
+    отдельно, в test_inbox."""
+
+    def __init__(self, kind="voice", secs=4.0, sound=b"WAV"):
+        self.kind, self.secs, self.sound = kind, secs, sound
+
+    def sniff(self, data, suffix): return self.kind
+
+    def seconds(self, data, suffix): return self.secs
+
+    def audio_from(self, data, suffix): return self.sound
+
+
+async def test_photo_goes_to_the_conversation():
     talk = Recorder(step="photo")
-    chat = _chat(tmp_path, talk)
+    chat = _chat(talk)
     await chat._intake(CHAT, USER, [{"type": "image", "payload": {"url": "http://x/a.jpg"}}])
     assert talk.got == [("photo", ".jpg", 32)]
 
 
-async def test_photo_without_conversation_points_at_the_window(tmp_path):
-    """Сценарий не начат — значит фото прислали «просто так», и это
-    по-прежнему история про окно."""
+async def test_attachment_without_a_conversation_shows_the_menu():
+    """Прислали файл, ничего не начав. Уводить в окно больше некуда —
+    показываем меню, чтобы человек хотя бы понял, с чего начать."""
     talk = Recorder(step="")
-    chat = _chat(tmp_path, talk)
+    chat = _chat(talk)
     await chat._intake(CHAT, USER, [{"type": "image", "payload": {"url": "http://x/a.jpg"}}])
-    assert talk.got == []
-    assert chat.said and "приложении" in chat.said[-1]
+    assert talk.got == [("menu", "", 0)]
+    assert not any("приложени" in said for said in chat.said)
 
 
-async def test_window_wins_when_it_asked_first(tmp_path):
-    """Человек нажал в окне «записать» и ушёл в чат. Даже если у него
-    висит незаконченный разговор, эта запись — для окна."""
-    talk = Recorder(step="voice")
-    chat = _chat(tmp_path, talk)
-    chat.inbox.arm(USER, "video", "video")
-    await chat._intake(CHAT, USER, [{"type": "video", "payload": {"url": "http://x/v.mp4"}}])
-    assert talk.got == []
-    assert chat.inbox.get(USER, "video") is not None
-
-
-async def test_conversation_wins_when_the_window_is_silent(tmp_path):
+async def test_video_goes_to_the_conversation():
     talk = Recorder(step="video")
-    chat = _chat(tmp_path, talk)
+    chat = _chat(talk, _Media(kind="video"))
     await chat._intake(CHAT, USER, [{"type": "video", "payload": {"url": "http://x/v.mp4"}}])
     assert talk.got == [("video", ".mp4", 32)]
-    assert chat.inbox.get(USER, "video") is None
+
+
+async def test_voice_step_takes_the_soundtrack_out_of_a_clip():
+    """Голосовые до бота не доезжают, поэтому образец голоса человек
+    присылает роликом — звук из него вынимаем до передачи в сценарий."""
+    talk = Recorder(step="voice")
+    chat = _chat(talk, _Media(kind="video", sound=b"RIFFxxxx"))
+    await chat._intake(CHAT, USER, [{"type": "video", "payload": {"url": "http://x/v.mp4"}}])
+    assert talk.got == [("voice", ".wav", 8)]
+
+
+async def test_too_short_recording_is_refused_before_the_scenario():
+    """Две секунды модель не примет, и узнать об этом надо сразу,
+    а не после генерации."""
+    talk = Recorder(step="voice")
+    chat = _chat(talk, _Media(kind="video", secs=1.2))
+    await chat._intake(CHAT, USER, [{"type": "video", "payload": {"url": "http://x/v.mp4"}}])
+    assert talk.got == []
+    assert chat.said and "двух секунд" in chat.said[-1]

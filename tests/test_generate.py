@@ -198,16 +198,16 @@ async def test_uploads_are_removed_after_success(tmp_path, h3, media):
     assert not (settings.data_dir / "work" / "j5").exists()
 
 
-async def test_voice_sent_to_chat_survives_generation(tmp_path, h3, media):
-    """Голосовое человек прислал один раз и вправе сделать по нему
-    несколько роликов. Удаляем только загруженное через окно."""
+async def test_preset_voice_survives_generation(tmp_path, h3, media):
+    """Готовый голос — общий на всех и живёт в каталоге данных. Уборка
+    после генерации трогает только загруженное человеком (папка uploads);
+    удалить пресет означало бы сломать его для всех остальных."""
     import shutil
 
     photo, voice = media
     settings = make_settings(tmp_path, h3.url)
-    kept = settings.inbox_dir / "7"
-    kept.mkdir(parents=True, exist_ok=True)
-    kept_voice = kept / "voice.wav"
+    settings.voices_dir.mkdir(parents=True, exist_ok=True)
+    kept_voice = settings.voices_dir / "anya.wav"
     shutil.copy(voice, kept_voice)
 
     await generate.make_runner(settings)(Job(

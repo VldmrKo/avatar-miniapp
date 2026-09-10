@@ -75,7 +75,7 @@ textarea{width:100%;font:inherit;padding:11px;border:1px solid var(--line);
 
 .go,.wide{width:100%;padding:15px;border:0;border-radius:14px;background:var(--accent);
           color:var(--accent-ink);font:inherit;font-weight:600;cursor:pointer}
-.go[disabled]{opacity:.5}
+.go[disabled],.go:disabled{opacity:.45;cursor:not-allowed}
 .wide{background:var(--soft);color:var(--ink);border:1px solid var(--line);font-weight:500}
 .err{color:var(--bad);font-size:14px;margin-top:10px;min-height:18px}
 

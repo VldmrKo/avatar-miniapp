@@ -85,7 +85,6 @@ async def state(request: web.Request) -> web.Response:
     jobs: JobManager = request.app["jobs"]
     who = caller_of(request)
     job = jobs.active_of(who.user_id)
-    inbox = request.app["inbox"]
     return web.json_response({
         "name": who.display_name,
         # Без ключей Kandinsky рисованный режим не работает. Окно узнаёт об
@@ -93,9 +92,6 @@ async def state(request: web.Request) -> web.Response:
         # кнопка, которая гарантированно приведёт к отказу.
         "toon": settings.toon_enabled,
         "job": job.public(jobs.position_of(job)) if job else None,
-        # Что человек уже прислал боту в чат. Окно не умеет ни писать голос,
-        # ни снимать видео — этим занимается сам мессенджер.
-        "inbox": inbox.public(who.user_id) if inbox else {},
     })
 
 
@@ -108,57 +104,6 @@ async def voices(request: web.Request) -> web.Response:
     ищут, почему файл лежит, а в окне пусто.
     """
     return web.json_response({"voices": request.app["read_voices"]()})
-
-
-@routes.post("/api/inbox/expect")
-async def expect(request: web.Request) -> web.Response:
-    """Окно сообщает боту, что сейчас придёт запись."""
-    who = caller_of(request)
-    inbox = request.app["inbox"]
-    body = await request.json()
-    kind = str(body.get("kind") or "")
-    if kind not in ("voice", "video") or not inbox:
-        return web.json_response({"error": "неизвестный вид записи"}, status=400)
-    # Экран, с которого ушли: голос нужен и обычному аватару, и рисованному,
-    # а кнопка из чата должна вернуть ровно туда, откуда человек ушёл.
-    screen = str(body.get("screen") or "")
-    if screen not in ("photo", "video", "toon"):
-        screen = ""
-    # «Записать заново» значит именно заново: старую запись убираем сразу.
-    # Иначе человек передумает записывать, нажмёт «Сделать аватара» и молча
-    # получит ролик по прошлому голосу.
-    inbox.clear(who.user_id, kind)
-    inbox.arm(who.user_id, kind, screen)
-    return web.json_response({"ok": True})
-
-
-@routes.delete("/api/inbox/{kind}")
-async def drop(request: web.Request) -> web.Response:
-    who = caller_of(request)
-    inbox = request.app["inbox"]
-    kind = request.match_info["kind"]
-    if kind not in ("voice", "video") or not inbox:
-        return web.json_response({"error": "неизвестный вид записи"}, status=400)
-    inbox.clear(who.user_id, kind)
-    return web.json_response({"ok": True})
-
-
-@routes.post("/api/probe")
-async def probe(request: web.Request) -> web.Response:
-    """Что умеет вебвью на конкретном телефоне. Только в лог.
-
-    Возможности вебвью MAX нигде не описаны, а гадать по одной попытке
-    дорого: человек с телефоном далеко, повторить эксперимент — это ещё
-    один раунд переписки. Поэтому окно один раз рассказывает, что у него
-    есть, и ответ на все вопросы разом лежит в журнале.
-
-    Ничего не храним и никуда не отвечаем: это диагностика, а не фича.
-    """
-    who = caller_of(request)
-    body = await request.json()
-    log.info("вебвью %s: %s", who.user_id,
-             ", ".join(f"{k}={v}" for k, v in sorted(body.items()))[:500])
-    return web.json_response({"ok": True})
 
 
 @routes.post("/api/avatar")
@@ -180,19 +125,6 @@ async def create(request: web.Request) -> web.Response:
             {"error": "рисованный аватар сейчас недоступен"}, status=503
         )
 
-    # Голос и видео могли приехать не через окно, а голосовым или роликом
-    # боту в чат — для MAX это единственный способ что-то записать.
-    inbox = request.app["inbox"]
-    if inbox:
-        if mode in ("photo", "toon") and not files.get("voice") and not files.get("voice_id"):
-            item = inbox.get(who.user_id, "voice")
-            if item:
-                files["voice"] = str(item.path)
-        if mode == "video" and not files.get("video"):
-            item = inbox.get(who.user_id, "video")
-            if item:
-                files["video"] = str(item.path)
-                files["_from_inbox"] = "video"
     if not text.strip():
         return web.json_response({"error": "нужен текст реплики"}, status=400)
 
@@ -298,13 +230,12 @@ async def _read_form(request: web.Request) -> tuple[str, str, dict]:
     return mode, text, files
 
 
-def build_app(settings: Settings, jobs: JobManager, read_voices, inbox=None) -> web.Application:
+def build_app(settings: Settings, jobs: JobManager, read_voices) -> web.Application:
     app = web.Application(client_max_size=MAX_UPLOAD_MB * 1024 * 1024)
     app["settings"] = settings
     app["jobs"] = jobs
     # Функция, а не список: каталог с голосами читается на каждый запрос.
     app["read_voices"] = read_voices if callable(read_voices) else (lambda: read_voices)
-    app["inbox"] = inbox
     app.add_routes(routes)
     app.router.add_static("/static/", STATIC_DIR, name="static")
     app.router.add_static("/media/", settings.media_dir, name="media")

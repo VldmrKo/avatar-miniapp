@@ -78,11 +78,6 @@ class Settings:
         return f"{len(token)} симв., {edges}"
 
     @property
-    def inbox_dir(self) -> Path:
-        """Голосовые и видео, присланные боту в чат."""
-        return self.data_dir / "inbox"
-
-    @property
     def jobs_dir(self) -> Path:
         return self.data_dir / "jobs"
 
@@ -100,7 +95,7 @@ class Settings:
         return bool(self.kandinsky_base_url and self.kandinsky_api_key) or self.use_stub
 
     def ensure_dirs(self) -> None:
-        for path in (self.jobs_dir, self.media_dir, self.voices_dir, self.inbox_dir):
+        for path in (self.jobs_dir, self.media_dir, self.voices_dir):
             path.mkdir(parents=True, exist_ok=True)
 
 

@@ -30,7 +30,6 @@ function makeWindow(state) {
     let body = {};
     if (url === "/api/state") body = state;
     else if (url === "/api/voices") body = { voices: [{ id: "anya", title: "Аня", note: "" }] };
-    else if (url.indexOf("/api/inbox/") === 0) body = { ok: true };
     return Promise.resolve({
       ok: true, status: 200, json: function () { return Promise.resolve(body); },
     });
@@ -41,6 +40,16 @@ function makeWindow(state) {
 
 const settled = () => new Promise((r) => setTimeout(r, 30));
 
+// jsdom не даёт положить файл в input руками — подменяем сам список.
+// Нам важно только «файл выбран», содержимое роли не играет.
+function fill(w, input, name) {
+  Object.defineProperty(input, "files", {
+    configurable: true,
+    value: [new w.File(["x"], name)],
+  });
+  input.dispatchEvent(new w.Event("change"));
+}
+
 function visible(d, id) {
   const el = d.getElementById(id);
   return el && !el.hidden;
@@ -49,87 +58,91 @@ function visible(d, id) {
 (async function () {
   // --- 1. пустое состояние -------------------------------------------------
   {
-    const { w, d } = makeWindow({ name: "Аня", job: null, inbox: { voice: null, video: null } });
+    const { w, d } = makeWindow({ name: "Аня", job: null });
     await settled();
     check("стартуем на экране выбора", d.getElementById("pick").classList.contains("on"));
-    check("слот голоса скрыт", !visible(d, "voice-slot"));
-    check("кнопка записи видна", visible(d, "voice-record"));
-    check("строка ожидания скрыта", !visible(d, "voice-armed"));
-    check("подпись кнопки исходная",
-      d.getElementById("voice-record").textContent === "Записать через бота",
-      d.getElementById("voice-record").textContent);
+    check("кнопки записи через бота больше нет", !d.getElementById("voice-record"));
+    check("кнопки записи видео через бота больше нет", !d.getElementById("video-record"));
+    check("слот видео скрыт", !visible(d, "video-slot"));
     w.close();
   }
 
-  // --- 2. голос уже принят -------------------------------------------------
+  // --- 2. порядок вкладок голоса -------------------------------------------
+  // «Свой голос» уехал третьим намеренно: это единственная вкладка, из
+  // которой в окне ничего не сделать, и стоять первой она не должна.
   {
-    const { w, d } = makeWindow({
-      name: "Аня", job: null,
-      inbox: { voice: { seconds: 6.5, age_s: 40, name: "voice.wav" }, video: null },
-    });
+    const { w, d } = makeWindow({ name: "Аня", job: null });
     await settled();
-    check("слот голоса показан", visible(d, "voice-slot"));
-    check("в слоте длительность",
-      d.querySelector("#voice-slot .slot-text").textContent.indexOf("6.5") >= 0,
-      d.querySelector("#voice-slot .slot-text").textContent);
-    check("кнопка предлагает перезапись",
-      d.getElementById("voice-record").textContent === "Записать заново");
+    const tabs = Array.from(d.querySelectorAll("[data-voice-tab]"))
+      .map((b) => b.getAttribute("data-voice-tab"));
+    check("порядок вкладок: готовый, файл, свой", tabs.join(",") === "preset,file,chat",
+      tabs.join(","));
+    check("первой открыта «готовый»",
+      d.querySelector('[data-voice-tab="preset"]').classList.contains("on"));
     w.close();
   }
 
-  // --- 3. крестик очищает форму, а не только кнопку -------------------------
+  // --- 3. кнопка неактивна, пока не заполнено всё ---------------------------
+  // Раньше форму можно было отправить пустой и получить ошибку в ответ.
+  // Отказ после нажатия человек читает как поломку; неактивная кнопка
+  // говорит то же самое, но заранее и без обвинений.
   {
-    const { w, d, calls } = makeWindow({
-      name: "Аня", job: null,
-      inbox: { voice: { seconds: 6.5, age_s: 40, name: "voice.wav" }, video: null },
-    });
+    const { w, d } = makeWindow({ name: "Аня", job: null });
     await settled();
-    d.querySelector('[data-drop="voice"]').click();
-    await settled();
-    check("крестик сходил на сервер",
-      calls.some((c) => c.method === "DELETE" && c.url === "/api/inbox/voice"));
-    check("слот исчез после крестика", !visible(d, "voice-slot"));
-    check("кнопка вернулась", visible(d, "voice-record"));
-    check("подпись кнопки сброшена",
-      d.getElementById("voice-record").textContent === "Записать через бота",
-      d.getElementById("voice-record").textContent);
+    const go = d.querySelector('[data-submit="photo"]');
+    check("сразу неактивна", go.disabled);
+
+    fill(w, d.getElementById("photo-file"), "face.png");
+    check("одного фото мало", go.disabled);
+
+    const area = d.getElementById("photo-text");
+    area.value = "Привет!";
+    area.dispatchEvent(new w.Event("input"));
+    check("фото и текст при готовом голосе — уже можно", !go.disabled);
+
+    // «Свой голос» в окне не заполняется ничем, значит и отправлять нечего.
+    d.querySelector('[data-voice-tab="chat"]').click();
+    check("на вкладке «свой голос» кнопка гаснет", go.disabled);
+
+    d.querySelector('[data-voice-tab="file"]').click();
+    check("на вкладке «файл» без файла тоже гаснет", go.disabled);
+    fill(w, d.getElementById("voice-file"), "voice.wav");
+    check("с файлом голоса снова можно", !go.disabled);
+
+    area.value = "   ";
+    area.dispatchEvent(new w.Event("input"));
+    check("пробелы за текст не считаются", go.disabled);
     w.close();
   }
 
-  // --- 4. «записать» переводит в ожидание -----------------------------------
+  // --- 4. видео: кнопка ждёт файл и реплику ---------------------------------
   {
-    const { w, d, calls } = makeWindow({ name: "Аня", job: null, inbox: { voice: null, video: null } });
+    const { w, d } = makeWindow({ name: "Аня", job: null });
     await settled();
-    d.getElementById("voice-record").click();
-    await settled();
-    check("окно предупредило сервер",
-      calls.some((c) => c.method === "POST" && c.url === "/api/inbox/expect"));
-    check("показана инструкция", visible(d, "voice-armed"));
-    check("кнопка скрыта, пока ждём", !visible(d, "voice-record"));
-    w.close();
-  }
+    const go = d.querySelector('[data-submit="video"]');
+    check("видео: сразу неактивна", go.disabled);
 
-  // --- 5. видео из чата и выбор файла ---------------------------------------
-  {
-    const { w, d } = makeWindow({
-      name: "Аня", job: null,
-      inbox: { voice: null, video: { seconds: 5.2, age_s: 10, name: "video.mp4" } },
-    });
-    await settled();
-    check("слот видео показан", visible(d, "video-slot"));
+    const area = d.getElementById("video-text");
+    area.value = "Привет!";
+    area.dispatchEvent(new w.Event("input"));
+    check("одного текста мало", go.disabled);
+
+    const input = d.getElementById("video-file");
+    fill(w, input, "clip.mp4");
+    input.dispatchEvent(new w.Event("change"));
+    check("слот показывает выбранное", visible(d, "video-slot"));
+    check("с файлом и текстом можно", !go.disabled);
+
     d.querySelector('[data-drop="video"]').click();
-    await settled();
-    check("слот видео исчез", !visible(d, "video-slot"));
-    check("кнопка видео вернулась", visible(d, "video-record"));
-    check("подпись кнопки видео сброшена",
-      d.getElementById("video-record").textContent === "Записать видео");
+    check("крестик убрал слот", !visible(d, "video-slot"));
+    check("и снова гасит кнопку", go.disabled);
     w.close();
   }
 
   // --- 6. незавершённая задача возвращает на экран ожидания ------------------
   {
     const { w, d } = makeWindow({
-      name: "Аня", inbox: { voice: null, video: null },
+      name: "Аня",
       job: { job_id: "j1", status: "running", progress: 40, media_url: null, error: "" },
     });
     await settled();
@@ -142,7 +155,7 @@ function visible(d, id) {
   // одна, а на сервер должно уехать разное. Проверяем оба направления.
   {
     const { w, d } = makeWindow({
-      name: "Аня", job: null, toon: true, inbox: { voice: null, video: null },
+      name: "Аня", job: null, toon: true,
     });
     await settled();
     check("кнопка мультяшного видна, когда сервер её разрешил", visible(d, "card-toon"));
@@ -168,7 +181,7 @@ function visible(d, id) {
   // --- 8. без ключей Kandinsky кнопки нет -----------------------------------
   {
     const { w, d } = makeWindow({
-      name: "Аня", job: null, toon: false, inbox: { voice: null, video: null },
+      name: "Аня", job: null, toon: false,
     });
     await settled();
     check("кнопка мультяшного скрыта, когда рисовать нечем", !visible(d, "card-toon"));
@@ -178,7 +191,7 @@ function visible(d, id) {
   // --- 9. портрет показывается, пока идёт видео ------------------------------
   {
     const { w, d } = makeWindow({
-      name: "Аня", inbox: { voice: null, video: null },
+      name: "Аня",
       job: { job_id: "t1", mode: "toon", status: "running", progress: 40,
              poster_url: "/media/t1_toon.png", media_url: null, error: "" },
     });
@@ -195,7 +208,7 @@ function visible(d, id) {
   // --- 10. короткая реплика помечается красным ------------------------------
   {
     const { w, d } = makeWindow({
-      name: "Аня", job: null, toon: true, inbox: { voice: null, video: null },
+      name: "Аня", job: null, toon: true,
     });
     await settled();
     // Подменяем ответ оценщика: важно поведение окна, а не арифметика сервера.
@@ -245,22 +258,23 @@ function visible(d, id) {
   }
 
   // --- 11. про запись голоса сказано честно и сразу -------------------------
-  // Микрофон вебвью MAX не даёт (проверено на телефоне: NotAllowedError).
-  // Значит человек должен узнать про длинный путь ДО того, как начнёт
-  // искать кнопку записи, а не после.
+  // Микрофон вебвью MAX не даёт (проверено на телефоне: NotAllowedError),
+  // и обмен файлами с ботом мы убрали как слишком длинный путь. Значит
+  // единственное, что окно тут может, — честно сказать, куда идти.
   {
-    const { w, d } = makeWindow({
-      name: "Аня", job: null, inbox: { voice: null, video: null },
-    });
+    const { w, d } = makeWindow({ name: "Аня", job: null });
     await settled();
     d.querySelector('[data-voice-tab="chat"]').click();
     await settled();
     const body = d.querySelector('[data-voice-body="chat"]');
-    check("предупреждение про бота на месте",
+    check("сказано, что запись только через бота",
       body.textContent.indexOf("только через бота") >= 0);
-    check("предложена запасная дорога",
-      body.textContent.indexOf("готовый голос") >= 0);
-    check("кнопки записи в окне нет", !d.getElementById("voice-capture"));
+    check("сказано, что делать",
+      body.textContent.indexOf("Вернитесь в чат") >= 0);
+    check("поля для образца нет", !d.getElementById("voice-slot"));
+    check("кнопки записи нет", !d.getElementById("voice-record"));
+    check("инструкции «что снять» нет",
+      body.textContent.indexOf("Что снять") < 0);
     w.close();
   }
 

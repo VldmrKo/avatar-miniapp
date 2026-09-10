@@ -19,7 +19,7 @@ from aiohttp import web
 from . import config, dialog, generate
 from .api import build_app
 from .chat import ChatSide
-from .inbox import Inbox
+from .inbox import Attachments
 from .jobs import DONE, Job, JobManager
 
 log = logging.getLogger("miniapp")
@@ -111,17 +111,13 @@ def main(argv: list[str] | None = None) -> int:
     # Конкурентность единица и здесь, и у инстанса: он падает по памяти,
     # если гнать задачи подряд. Очередь на всех, а не по задаче на человека.
     jobs = JobManager(settings.jobs_dir, runner, concurrency=1)
-    inbox = Inbox(settings.inbox_dir,
-                  ffprobe=settings.ffmpeg.replace("ffmpeg", "ffprobe"),
-                  ffmpeg=settings.ffmpeg)
-    inbox.sweep()
-    app = build_app(settings, jobs, lambda: load_voices(settings), inbox)
+    app = build_app(settings, jobs, lambda: load_voices(settings))
 
     chat: ChatSide | None = None
     if settings.chat_enabled:
-        # Сценарий в переписке. Складываем его файлы отдельно от inbox:
-        # inbox держит по одному последнему файлу на вид и живёт сутки,
-        # а здесь файлы принадлежат конкретному незаконченному разговору.
+        # Сценарий в переписке — единственный путь, по которому в систему
+        # попадают файлы из чата. Кладём их туда же, куда окно кладёт свои:
+        # generate чистит эту папку после генерации.
         uploads = settings.data_dir / "uploads"
 
         def save_file(user_id: int, kind: str, data: bytes, suffix: str) -> Path:
@@ -140,8 +136,11 @@ def main(argv: list[str] | None = None) -> int:
 
             return estimate_speech_seconds(text)
 
-        chat = ChatSide(settings.bot_token, settings.webapp_url, inbox,
-                        state_path=settings.data_dir / "chat_state.json")
+        chat = ChatSide(
+            settings.bot_token, settings.webapp_url,
+            media=Attachments(ffprobe=settings.ffmpeg.replace("ffmpeg", "ffprobe"),
+                              ffmpeg=settings.ffmpeg),
+        )
         chat.conversation = dialog.Conversation(
             dialog.Store(settings.data_dir / "dialogs"),
             send=chat.ask,

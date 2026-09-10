@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from pathlib import Path
 
@@ -20,31 +19,20 @@ from maxapi.enums import UploadType
 from maxapi.filters import F
 from maxapi.enums import AttachmentType
 from maxapi.types import (Attachment, BotStarted, ButtonsPayload, CallbackButton,
-                          InputMediaBuffer, LinkButton, MessageCallback, MessageCreated,
-                          OpenAppButton)
+                          InputMediaBuffer, MessageCallback, MessageCreated)
 
 from . import maxcompat
-from .inbox import VIDEO, VOICE, Inbox
+from .inbox import VIDEO, VOICE, Attachments
 
 log = logging.getLogger("miniapp.chat")
 
+# Запасное приветствие: используется, только если сценарий не подключён
+# (бот поднят без него). Обычный путь — меню из dialog.begin.
 GREETING = (
     "Привет! Я делаю говорящего аватара по вашему фото или видео.\n\n"
-    "Напишите что-нибудь или нажмите «Старт» внизу."
+    "Напишите «/start» — покажу, что умею."
 )
 NUDGE = "Напишите «/start» — покажу, что умею."
-GOT_PHOTO = (
-    "Фото загружается в приложении: там же выбирается голос и текст.\n"
-    "Нажмите «Старт» внизу."
-)
-GOT_VOICE = (
-    "Голос принят — {seconds:.0f} с.\n"
-    "Вернитесь в приложение: он уже выбран во вкладке «Свой голос»."
-)
-GOT_VIDEO = (
-    "Видео принято — {seconds:.0f} с.\n"
-    "Вернитесь в приложение и нажмите «Сделать аватара»."
-)
 TOO_SHORT_VOICE = (
     "Запись короче двух секунд — модель такую не примет.\n"
     "Запишите ещё раз, скажите пару фраз."
@@ -102,22 +90,18 @@ def suffix_of(url: str, fallback: str) -> str:
 
 
 class ChatSide:
-    def __init__(self, token: str, webapp_url: str, inbox: Inbox | None = None,
-                 state_path: Path | None = None, conversation=None) -> None:
+    def __init__(self, token: str, webapp_url: str = "",
+                 media: Attachments | None = None, conversation=None) -> None:
         self.bot = Bot(token)
         self.dp = Dispatcher()
         self.webapp_url = webapp_url
-        self.inbox = inbox
+        # Разбор входящих файлов: что это и как достать звук. Склада больше
+        # нет — вложение сразу уходит в сценарий.
+        self.media = media or Attachments()
         # Сценарий в переписке. Без него бот остаётся тем, чем был, —
         # приветствием и доставкой; с ним умеет весь путь сам.
         self.conversation = conversation
         self.username = ""
-        # Какой способ вернуть человека в приложение MAX принял. Пустая
-        # строка — ещё не пробовали или ни один не подошёл. Запоминаем на
-        # диск: иначе после каждой выкладки снова два неудачных запроса
-        # к API, и в журнале снова выглядит как поломка.
-        self._state_path = state_path
-        self._good_way = self._recall()
         self._task: asyncio.Task | None = None
         self._register()
 
@@ -139,24 +123,6 @@ class ChatSide:
             await self.conversation.begin(chat_id, user_id)
             return
         await self._say(event, GREETING)
-
-    def _recall(self) -> str:
-        if not self._state_path or not self._state_path.is_file():
-            return ""
-        try:
-            return str(json.loads(self._state_path.read_text(encoding="utf-8")).get("way") or "")
-        except (OSError, ValueError):
-            return ""
-
-    def _remember(self, way: str) -> None:
-        if not self._state_path:
-            return
-        try:
-            self._state_path.parent.mkdir(parents=True, exist_ok=True)
-            self._state_path.write_text(json.dumps({"way": way}, ensure_ascii=False),
-                                        encoding="utf-8")
-        except OSError as exc:
-            log.debug("не запомнили способ возврата: %s", exc)
 
     # --- обработчики ------------------------------------------------------
 
@@ -267,11 +233,14 @@ class ChatSide:
 
     async def _intake(self, chat_id: int | None, user_id: int | None,
                       attachments: list) -> None:
-        """Голосовое и видео из чата — это наша запись с камеры и микрофона.
+        """Вложение — это ответ на вопрос сценария, и других адресатов нет.
 
-        Окну MAX ни микрофон, ни камеру в режиме видео не отдаёт, а себе —
-        отдаёт. Поэтому пишет человек привычной кнопкой в переписке, а мы
-        забираем файл по ссылке из вложения.
+        Раньше вложения могло ждать ещё и окно: оно не умеет ни записать
+        голос, ни снять видео, и просило сделать это в чате. Путь выходил
+        на шесть действий с тремя переключениями контекста, поэтому его
+        убрали целиком — весь сценарий теперь живёт здесь. Если разговор
+        ничего не ждёт, вложение просто не к чему приложить: показываем
+        меню, а не подсказку про окно.
         """
         for attachment in attachments:
             kind, url = self._describe(attachment)
@@ -279,34 +248,33 @@ class ChatSide:
             # один раз это уже спасло от гадания, чем MAX шлёт голосовое.
             log.info("вложение: тип=%s, ссылка=%s", kind or "?", (url or "нет")[:120])
 
-        if self.inbox is None or user_id is None or chat_id is None:
-            log.warning("вложение некуда положить: inbox=%s, user_id=%s, chat_id=%s",
-                        bool(self.inbox), user_id, chat_id)
+        if user_id is None or chat_id is None:
+            log.warning("вложение некуда деть: user_id=%s, chat_id=%s", user_id, chat_id)
+            return
+        if not self.conversation:
+            await self._send(chat_id, NUDGE)
             return
 
-        expected = self.inbox.expected(user_id)
-        # Кто главный на это вложение. Окно, если оно явно попросило запись
-        # («жду голос»), — иначе сценарий в переписке, если он чего-то ждёт.
-        # Порядок именно такой: человек, нажавший в окне «записать», ушёл
-        # сюда с конкретным намерением, и перехватывать его нельзя.
-        step = ""
-        if not expected and self.conversation:
-            step = self.conversation.waiting_for(user_id)
+        step = self.conversation.waiting_for(user_id)
+        if not step:
+            await self.conversation.begin(chat_id, user_id, greet=False)
+            return
 
         for attachment in attachments:
             kind, url = self._describe(attachment)
+            if not url:
+                continue
+
             if kind == "image":
-                if step and url:
-                    data = await self._download(url)
-                    if data is None:
-                        await self._send(chat_id, CANT_TAKE)
-                        return
-                    await self.conversation.on_file(
-                        chat_id, user_id, "photo", data, suffix_of(url, ".jpg"))
+                data = await self._download(url)
+                if data is None:
+                    await self._send(chat_id, CANT_TAKE)
                     return
-                await self._send(chat_id, GOT_PHOTO)
+                await self.conversation.on_file(
+                    chat_id, user_id, "photo", data, suffix_of(url, ".jpg"))
                 return
-            if kind not in ("audio", "video", "file") or not url:
+
+            if kind not in ("audio", "video", "file"):
                 continue
 
             data = await self._download(url)
@@ -322,52 +290,26 @@ class ChatSide:
                 # MAX отдаёт и голосовое, и видео как `file` со ссылкой
                 # `getfile?rq=...` — ни расширения, ни подсказки. Смотрим
                 # содержимое: есть видеодорожка — значит видео.
-                want = self.inbox.sniff(data, suffix_of(url, "")) or expected or VOICE
+                want = self.media.sniff(data, suffix_of(url, "")) or VOICE
             suffix = suffix_of(url, ".mp4" if want == VIDEO else ".ogg")
 
-            # Сценарий в переписке забирает вложение себе. Голос он просит
-            # видеороликом (голосовые до бота не доходят), поэтому на шаге
-            # голоса из ролика сразу вынимаем дорожку — дальше по коду это
-            # делается только для окна.
-            if step:
-                if step == "voice" and want == VIDEO:
-                    sound = self.inbox.audio_from(data, suffix)
-                    if sound:
-                        data, suffix, want = sound, ".wav", VOICE
-                await self.conversation.on_file(chat_id, user_id, want, data, suffix)
-                return
-
-            # Голосовые до бота не доезжают — MAX присылает по ним пустое
-            # событие без тела. Зато видео доезжает. Поэтому если человек
-            # шёл записывать голос, а прислал ролик — берём звук оттуда.
-            if want == VIDEO and expected == VOICE:
-                sound = self.inbox.audio_from(data, suffix)
-                if sound:
-                    data, want, suffix = sound, VOICE, ".wav"
-                    log.info("ждали голос, пришло видео — взяли звуковую дорожку")
-
-            try:
-                item = self.inbox.put(user_id, want, data, suffix)
-            except ValueError as exc:
-                log.warning("вложение не принято: %s", exc)
-                await self._send(chat_id, CANT_TAKE)
-                return
-
-            if item.seconds and item.seconds < 2.0:
-                self.inbox.clear(user_id, want)
+            # Короткая запись — отказ модели уже после генерации, а человек
+            # к тому времени успевает забыть, что прислал две секунды.
+            # Дешевле сказать сразу.
+            seconds = self.media.seconds(data, suffix)
+            if seconds and seconds < 2.0:
                 await self._send(chat_id,
                                  TOO_SHORT_VIDEO if want == VIDEO else TOO_SHORT_VOICE)
                 return
 
-            # Куда возвращать, спрашиваем у inbox: голос нужен и обычному
-            # аватару, и рисованному, и по виду записи это не различить.
-            back = self.inbox.expected_screen(user_id) or (
-                "video" if want == VIDEO else "photo"
-            )
-            self.inbox.disarm(user_id)
-            template = GOT_VIDEO if want == VIDEO else GOT_VOICE
-            await self._send(chat_id, template.format(seconds=item.seconds),
-                             open_app=back)
+            # Голос человек присылает роликом: голосовые до бота не доезжают
+            # (MAX шлёт по ним пустое событие без тела), а видео доезжает.
+            # Значит на шаге голоса берём из ролика звуковую дорожку.
+            if step == "voice" and want == VIDEO:
+                sound = self.media.audio_from(data, suffix)
+                if sound:
+                    data, suffix, want = sound, ".wav", VOICE
+            await self.conversation.on_file(chat_id, user_id, want, data, suffix)
             return
 
         # Дошли сюда — вложение есть, но не то, что мы умеем брать.
@@ -388,44 +330,20 @@ class ChatSide:
 
     # --- отправка ---------------------------------------------------------
 
-    async def _say(self, event, text: str, open_app: str = "") -> None:
+    async def _say(self, event, text: str) -> None:
         chat_id = chat_id_of(event)
         if chat_id is None:
             log.warning("не нашли, куда отвечать: %s", type(event).__name__)
             return
-        await self._send(chat_id, text, open_app)
+        await self._send(chat_id, text)
 
-    async def _send(self, chat_id: int, text: str, open_app: str = "") -> None:
-        """Сообщение, при возможности с кнопкой возврата в приложение.
+    async def _send(self, chat_id: int, text: str) -> None:
+        """Простое сообщение без кнопок.
 
-        Кнопка приятна, но не обязательна: если MAX её не принял, человек
-        всё равно должен получить текст. Молчание тут хуже некрасивого.
+        Кнопки «вернуться в приложение» здесь больше нет: окно не просит
+        ничего присылать в чат, и возвращать человека некуда — сценарий
+        целиком идёт здесь же.
         """
-        if open_app:
-            ways = self._ways_back(open_app)
-            # Как только какой-то способ сработал — держимся за него: перебор
-            # стоит по неудачному запросу к API на каждое сообщение.
-            if self._good_way:
-                ways = [w for w in ways if w[0] == self._good_way] or ways
-            last = len(ways) - 1
-            for number, (name, attachments) in enumerate(ways):
-                try:
-                    await self.bot.send_message(chat_id=chat_id, text=text,
-                                                attachments=attachments)
-                    if self._good_way != name:
-                        log.info("кнопка возврата: работает вариант «%s»", name)
-                        self._remember(name)
-                    self._good_way = name
-                    return
-                except Exception as exc:  # noqa: BLE001
-                    # Перебор — штатная работа, а не поломка. Тревожный тон
-                    # уместен только когда кончились все варианты.
-                    level = log.warning if number == last else log.info
-                    level("вариант «%s» не подошёл%s: %s", name,
-                          "" if number == last else ", пробую следующий", exc)
-            self._good_way = ""
-            log.error("ни один способ вернуть в приложение не сработал — шлём без кнопки. "
-                      "Проверьте адрес в business.max.ru/self и MAX_WEBAPP_URL")
         try:
             await self.bot.send_message(chat_id=chat_id, text=text)
         except Exception as exc:  # noqa: BLE001 — упавший мессенджер не должен ронять бота
@@ -452,9 +370,9 @@ class ChatSide:
     async def ask(self, chat_id: int, text: str, buttons: list) -> None:
         """Сообщение сценария: текст плюс кнопки-ответы, по одной в ряд.
 
-        Отдельный метод, а не параметр к _send: тот занят кнопкой возврата
-        в приложение и её перебором вариантов, и мешать эти две задачи —
-        верный способ однажды отправить не то и не туда.
+        Отдельный метод, а не параметр к _send: там простой текст без
+        кнопок, и смешивать «сказал» и «спросил» в одной функции — верный
+        способ однажды отправить вопрос без вариантов ответа.
         """
         attachments = []
         if buttons:
@@ -466,30 +384,6 @@ class ChatSide:
                                         attachments=attachments)
         except Exception as exc:  # noqa: BLE001
             log.error("сценарий: не отправилось в %s: %s", chat_id, exc)
-
-    def _ways_back(self, screen: str) -> list[tuple[str, list]]:
-        """Чем вернуть человека в приложение, от лучшего к работающему.
-
-        OpenAppButton открывает окно прямо в мессенджере, но MAX ищет адрес
-        в своём реестре по точному совпадению и на расхождение отвечает
-        «Link not found with pk = LinkPK{name=...}». Что именно там записано,
-        снаружи не видно.
-
-        Поэтому в запасе глубокая ссылка `max.ru/<бот>?startapp=<экран>` —
-        обычная ссылка, никакого реестра, а payload приезжает в окно тем же
-        start_param. Работает всегда, просто выглядит как ссылка, а не кнопка.
-        """
-        ways: list[tuple[str, list]] = []
-        if self.webapp_url:
-            base = self.webapp_url.rstrip("/")
-            for url in dict.fromkeys([self.webapp_url, base + "/", base]):
-                ways.append((f"приложение {url}", self.keyboard(
-                    OpenAppButton(text="Открыть приложение", web_app=url, payload=screen))))
-        if self.username:
-            link = f"https://max.ru/{self.username}?startapp={screen}"
-            ways.append((f"ссылка {link}", self.keyboard(
-                LinkButton(text="Открыть приложение", url=link))))
-        return ways
 
     async def deliver(self, user_id: int, video: Path, caption: str, feedback_key: str,
                       poster: Path | None = None) -> None:

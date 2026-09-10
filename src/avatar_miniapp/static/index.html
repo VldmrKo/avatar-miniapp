@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Аватар</title>
-<link rel="stylesheet" href="/static/style.css?v=7">
+<link rel="stylesheet" href="/static/style.css?v=8">
 <!-- Мост MAX. Именно он создаёт window.WebApp, откуда берётся подписанный
      initData. Без этой строки страница открывается, но подписи у неё нет,
      и сервер честно отвечает 401 на каждый запрос. Грузим синхронно и до
@@ -55,46 +55,12 @@
     <span class="label">Голос</span>
     <div class="tabs" id="voice-tabs">
       <button class="tab on" data-voice-tab="preset">Готовый</button>
-      <button class="tab" data-voice-tab="chat">Свой голос</button>
       <button class="tab" data-voice-tab="file">Файл</button>
+      <button class="tab" data-voice-tab="chat">Свой голос</button>
     </div>
 
     <div class="tabbody on" data-voice-body="preset">
       <div id="voice-list" class="chips"></div>
-    </div>
-    <div class="tabbody" data-voice-body="chat">
-      <!-- Записать голос прямо здесь нельзя, и это не наша недоработка:
-           у бриджа MAX нет метода доступа к микрофону, а getUserMedia
-           вебвью отклоняет (проверено: NotAllowedError при живых
-           mediaDevices и MediaRecorder). Поэтому говорим об этом честно
-           и сразу, а не прячем за кнопкой, которая не сработает. -->
-      <div class="statusline warnbox">
-        <b>Запись — только через бота.</b> MAX не даёт окну микрофон,
-        поэтому путь такой: закрыть окно → снять боту короткое видео →
-        вернуться по кнопке из чата.
-        <br><br>Если возиться не хочется — возьмите готовый голос
-        на соседней вкладке или загрузите файл.
-      </div>
-
-      <!-- Инструкция дословная и с готовой фразой. Человек, которому просто
-           сказали «запишите голос», встаёт в ступор на вопросе «а что
-           говорить» — и записывает две секунды мычания. -->
-      <p class="hint"><b>Что снять:</b> видео на 4–7 секунд, в тишине.
-        <br>Скажите: «Это мой образец голоса для аватара».
-        <br>Нужен только голос, само видео никуда не пойдёт.</p>
-
-      <div id="voice-slot" class="slot" hidden>
-        <span class="slot-text"></span>
-        <button class="slot-x" data-drop="voice" title="удалить запись">×</button>
-      </div>
-
-      <button class="wide" id="voice-record">Записать через бота</button>
-      <div id="voice-armed" class="statusline" hidden>
-        Жду вашу запись. Нажмите «назад» — окно закроется. Снимите боту
-        видео на 4–7 секунд и скажите в тишине:
-        «Это мой образец голоса для аватара».
-        Я возьму оттуда голос и напишу в чат.
-      </div>
     </div>
     <div class="tabbody" data-voice-body="file">
       <!-- Видео тоже принимаем: голос из него мы всё равно вытаскиваем сами,
@@ -102,6 +68,19 @@
       <input type="file" id="voice-file" accept="audio/*,video/*">
       <div class="hint">4–7 секунд чистой речи, без музыки и посторонних
         звуков. Подойдёт и видео — голос возьму из него.</div>
+    </div>
+    <div class="tabbody" data-voice-body="chat">
+      <!-- Записать голос прямо здесь нельзя, и это не наша недоработка:
+           у бриджа MAX нет метода доступа к микрофону, а getUserMedia
+           вебвью отклоняет (проверено: NotAllowedError при живых
+           mediaDevices и MediaRecorder). Раньше здесь была кнопка
+           «записать через бота» и обмен файлами с чатом — шесть действий
+           с тремя переключениями контекста. Теперь честнее: весь путь
+           со своим голосом целиком проходится в переписке. -->
+      <div class="statusline warnbox" id="voice-chat-note">
+        Запись своего голоса доступна только через бота из-за ограничения
+        платформы MAX. Вернитесь в чат для записи голоса и создания аватара.
+      </div>
     </div>
   </div>
 
@@ -123,20 +102,16 @@
     <span class="label">Видео</span>
     <div id="video-slot" class="slot" hidden>
       <span class="slot-text"></span>
-      <button class="slot-x" data-drop="video" title="удалить видео">×</button>
+      <button class="slot-x" data-drop="video" title="убрать видео">×</button>
     </div>
-    <button class="wide" id="video-record">Записать через бота</button>
-    <div id="video-armed" class="statusline" hidden>
-      Жду ваше видео. Нажмите «назад» — окно закроется, снимите ролик
-      на 4–7 секунд, где вы говорите, и отправьте его боту.
-      Как приму, пришлю кнопку обратно сюда.
-    </div>
-    <label class="wide filebtn">Выбрать готовое видео
+    <label class="wide filebtn">Выбрать видео
       <input type="file" id="video-file" accept="video/*" hidden>
     </label>
-    <div class="hint">Снимите 4–7 секунд, где вы говорите в тишине —
+    <div class="hint">Ролик на 4–7 секунд, где вы говорите в тишине —
       например «Это мой образец голоса для аватара». Возьму оттуда
-      и внешность, и голос.</div>
+      и внешность, и голос.
+      <br>Снять видео прямо здесь MAX не даёт — выберите готовое из
+      галереи или сделайте аватара в боте.</div>
   </div>
 
   <label class="field">
@@ -169,6 +144,6 @@
   <video id="wait-video" controls playsinline hidden></video>
 </section>
 
-<script src="/static/app.js?v=7"></script>
+<script src="/static/app.js?v=8"></script>
 </body>
 </html>

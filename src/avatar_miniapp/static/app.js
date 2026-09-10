@@ -7,6 +7,13 @@
  *    сам MAX и закрывает окно, а другого способа его закрыть в API нет;
  *  - при открытии окна первым делом спрашиваем /api/state: человек мог
  *    закрыть окно в середине генерации и вернуться.
+ *
+ * Чего здесь больше НЕТ: обмена файлами с чатом. Окну MAX не отдаёт ни
+ * микрофон, ни камеру, и раньше запись заказывалась боту — окно ждало,
+ * человек уходил в переписку, снимал, возвращался по кнопке. Шесть
+ * действий на одно поле. Теперь весь путь со своим голосом целиком идёт
+ * в переписке, а окно работает только с тем, что можно выбрать прямо
+ * здесь: готовый голос или файл.
  */
 (function () {
   "use strict";
@@ -14,22 +21,13 @@
   var WA = window.WebApp || null;
   var INIT = WA && WA.initData ? WA.initData : "";
   var voice = { mode: "preset", id: "" };
-  var inbox = { voice: null, video: null };
   var pickedVideo = null;
-  // Записано нативным рекордером прямо из окна, без выхода в чат.
-  // Голос мы всё равно вытаскиваем из дорожки, поэтому здесь может лежать
-  // и видео — для нас это источник голоса, а не картинки.
-  var pickedVoice = null;
   // Экран photo обслуживает два режима — обычный аватар и рисованный.
   // Вход у них одинаковый, различается только то, что делает сервер,
   // поэтому держим один экран и одну переменную вместо двух копий разметки.
   var photoMode = "photo";
-  // Бот прикладывает к ответу кнопку с payload — по ней открываем
-  // сразу тот экран, с которого человек уходил записывать.
-  var startAt = (WA && WA.initDataUnsafe && WA.initDataUnsafe.start_param) || "";
   var poll = null;
   var screen = "boot";
-  var armedScreen = false;
 
   // --- сеть -----------------------------------------------------------------
 
@@ -58,7 +56,7 @@
     if (el) el.classList.add("on");
 
     if (!WA || !WA.BackButton) return;
-    if (!armedScreen && (name === "photo" || name === "video")) {
+    if (name === "photo" || name === "video") {
       WA.BackButton.show();
     } else {
       // На pick и на ожидании кнопку отдаём системе: там она закрывает окно.
@@ -70,9 +68,7 @@
     WA.BackButton.onClick(function () {
       // Событие на части платформ прилетает и при скрытой кнопке,
       // поэтому смотрим текущий экран, а не доверяем видимости.
-      // Пока ждём запись, «назад» должен закрывать окно, а не уводить
-      // на выбор режима: человек как раз идёт в чат записывать.
-      if (!armedScreen && (screen === "photo" || screen === "video")) show("pick");
+      if (screen === "photo" || screen === "video") show("pick");
     });
   }
 
@@ -86,6 +82,30 @@
       toon ? "Нарисовать и оживить" : "Сделать аватара";
   }
 
+  // --- готовность формы -----------------------------------------------------
+  // Кнопка неактивна, пока не заполнено всё. Так честнее, чем ошибка после
+  // нажатия: человек видит, что чего-то не хватает, ещё до того как ткнул,
+  // и не гадает, почему «сделать» ничего не сделало.
+
+  function voiceReady() {
+    if (voice.mode === "preset") return !!voice.id;
+    if (voice.mode === "file") return !!document.getElementById("voice-file").files[0];
+    // Вкладка «свой голос» — это объяснение, а не поле ввода: записать
+    // голос в окне MAX не даёт, весь такой путь идёт в переписке.
+    return false;
+  }
+
+  function refreshGo() {
+    var photoOk = !!document.getElementById("photo-file").files[0]
+                && voiceReady()
+                && !!document.getElementById("photo-text").value.trim();
+    document.querySelector('[data-submit="photo"]').disabled = !photoOk;
+
+    var videoOk = !!pickedVideo
+                && !!document.getElementById("video-text").value.trim();
+    document.querySelector('[data-submit="video"]').disabled = !videoOk;
+  }
+
   // --- счётчик секунд -------------------------------------------------------
   // Показываем секунды, а не символы: ограничивает нас длительность речи,
   // а не длина строки, и человеку так понятнее, почему нельзя больше.
@@ -95,9 +115,12 @@
     var out = document.querySelector('[data-counter="' + id + '"]');
     var timer = null;
     area.addEventListener("input", function () {
+      // Готовность считаем сразу, без задержки: кнопка должна оживать
+      // на первом же символе, а не через четверть секунды.
+      refreshGo();
       clearTimeout(timer);
       timer = setTimeout(function () {
-        if (!area.value.trim()) { out.textContent = " "; out.className = "counter"; return; }
+        if (!area.value.trim()) { out.textContent = " "; out.className = "counter"; return; }
         api("/api/estimate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -119,7 +142,7 @@
             out.textContent = "≈ " + Math.round(r.speech_seconds) + " с";
             out.className = "counter";
           }
-        }).catch(function () { out.textContent = " "; });
+        }).catch(function () { out.textContent = " "; });
       }, 250);
     });
   }
@@ -139,18 +162,19 @@
         for (var k = 0; k < bodies.length; k++) {
           bodies[k].classList.toggle("on", bodies[k].getAttribute("data-voice-body") === name);
         }
-        // Человек мог записать голосовое, не закрывая окно, и вернуться
-        // сюда переключением вкладки — перечитываем состояние.
-        if (name === "chat") { refreshInbox(); probeOnce(); }
+        refreshGo();
       });
     }
+
+    document.getElementById("voice-file").addEventListener("change", refreshGo);
 
     api("/api/voices").then(function (r) {
       var box = document.getElementById("voice-list");
       box.innerHTML = "";
       if (!r.voices.length) {
         box.innerHTML = '<div class="hint">Готовых голосов пока нет — '
-                      + 'запишите свой или загрузите файл.</div>';
+                      + 'загрузите файл или сделайте аватара в боте.</div>';
+        refreshGo();
         return;
       }
       r.voices.forEach(function (v, n) {
@@ -162,171 +186,37 @@
           for (var i = 0; i < all.length; i++) all[i].classList.remove("on");
           b.classList.add("on");
           voice.id = v.id;
+          refreshGo();
         });
         if (n === 0) voice.id = v.id;
         box.appendChild(b);
       });
+      refreshGo();
     });
   }
 
-  // --- разведка возможностей вебвью ------------------------------------------
-  // Возможности вебвью MAX нигде не описаны. Один раз спрашиваем сам браузер
-  // и отправляем ответ в лог сервера: так один тап на телефоне заказчика
-  // отвечает сразу на все вопросы, вместо раунда переписки на каждый.
-  // Ничего не показываем человеку и ничего не решаем на основе ответа —
-  // это чистая диагностика.
+  // --- видео ----------------------------------------------------------------
 
-  var probed = false;
-
-  function probeOnce() {
-    if (probed) return;
-    probed = true;
-    var input = document.createElement("input");
-    var facts = {
-      platform: (WA && WA.platform) || "вне MAX",
-      version: (WA && WA.version) || "",
-      capture: "capture" in input,
-      mediaDevices: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
-      recorder: typeof window.MediaRecorder === "function",
-      secure: window.isSecureContext === true
-    };
-    var send = function () {
-      api("/api/probe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(facts)
-      }).catch(function () {});
-    };
-    if (!facts.mediaDevices) { facts.mic = "нет mediaDevices"; send(); return; }
-    // Сам запрос микрофона делаем ровно здесь и ловим имя отказа: оно и
-    // отличает «не дали прав» от «вебвью не умеет в принципе».
-    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
-      facts.mic = "дали";
-      stream.getTracks().forEach(function (t) { t.stop(); });
-      send();
-    }).catch(function (e) {
-      facts.mic = "отказ: " + (e && e.name ? e.name : "неизвестно");
-      send();
-    });
-  }
-
-  // --- что уже прислано боту в чат -------------------------------------------
-  // Окну MAX не даёт ни микрофон, ни камеру в режиме видео. Записывает сам
-  // мессенджер, а окно показывает, что принято.
-
-  function ago(seconds) {
-    if (seconds < 60) return "только что";
-    var minutes = Math.round(seconds / 60);
-    if (minutes < 60) return minutes + " мин назад";
-    return Math.round(minutes / 60) + " ч назад";
-  }
-
-  function refreshInbox() {
-    api("/api/state").then(function (state) {
-      inbox = state.inbox || { voice: null, video: null };
-      showInbox();
-    }).catch(function () {});
-  }
-
-  function arm(kind) {
-    return api("/api/inbox/expect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      // Экран отдаём серверу: кнопка из чата должна вернуть человека туда,
-      // откуда он ушёл, а голос нужен обоим режимам экрана photo.
-      body: JSON.stringify({ kind: kind, screen: screen === "photo" ? photoMode : screen })
-    }).then(function () {
-      // Отпускаем «назад» системе: закрыть окно программно в API MAX нечем,
-      // а незанятую кнопку мессенджер обрабатывает сам и окно закрывает.
-      if (WA && WA.BackButton) WA.BackButton.hide();
-      armedScreen = true;
-      // Запись просят перезаписать — старую с экрана убираем сразу,
-      // иначе непонятно, ждём мы новую или уже нет.
-      inbox[kind] = null;
-      if (kind === "video") { pickedVideo = null; } else { pickedVoice = null; }
-      showInbox();
-    }).catch(function (e) {
-      document.getElementById(kind === "voice" ? "voice-armed" : "video-armed").textContent =
-        "Не получилось: " + e.message;
-    });
-  }
-
-  function drop(kind) {
-    // Крестик должен убирать запись целиком: и с сервера, и с экрана.
-    // Раньше ошибка молча съедалась, и человек видел, что ничего не изменилось.
-    return api("/api/inbox/" + kind, { method: "DELETE" }).then(function () {
-      inbox[kind] = null;
-      if (kind === "video") {
-        pickedVideo = null;
-        document.getElementById("video-file").value = "";
-      } else {
-        pickedVoice = null;
-      }
-      armedScreen = false;
-      showInbox();
-    }).catch(function (e) {
-      var line = document.getElementById(kind === "voice" ? "voice-armed" : "video-armed");
-      line.hidden = false;
-      line.textContent = "Не удалось удалить: " + e.message;
-    });
-  }
-
-  function wireInboxButtons() {
-    document.getElementById("voice-record").addEventListener("click", function () {
-      arm("voice");
-    });
-    document.getElementById("video-record").addEventListener("click", function () {
-      arm("video");
-    });
-    document.querySelectorAll("[data-drop]").forEach(function (b) {
-      b.addEventListener("click", function () { drop(b.getAttribute("data-drop")); });
-    });
+  function wireVideo() {
     var input = document.getElementById("video-file");
     input.addEventListener("change", function () {
       pickedVideo = input.files[0] || null;
       showVideoState();
     });
-  }
-
-  // Оба блока показываются одинаково, поэтому и рисуются одной функцией:
-  // раньше они разошлись, и в одном я забыл вернуть кнопку и спрятать
-  // строку ожидания. Ровно такие несимметричности и вылезают на экране.
-  function paintSlot(prefix, filled, caption, idleLabel, againLabel) {
-    var slot = document.getElementById(prefix + "-slot");
-    var record = document.getElementById(prefix + "-record");
-    var armedLine = document.getElementById(prefix + "-armed");
-
-    slot.hidden = !filled;
-    if (filled) slot.querySelector(".slot-text").textContent = caption;
-
-    // Строка «жду запись» имеет смысл, только пока мы правда ждём.
-    var waiting = armedScreen && !filled;
-    armedLine.hidden = !waiting;
-    record.hidden = waiting;
-    record.textContent = filled ? againLabel : idleLabel;
-
-  }
-
-  function showInbox() {
-    // Источников голоса теперь два: записанное прямо в окне и присланное
-    // боту в чат. Показываем то, что ближе к человеку по времени, — только
-    // что записанное важнее вчерашнего.
-    var caption = "";
-    if (pickedVoice) caption = "Записано: " + pickedVoice.name;
-    else if (inbox.voice) {
-      caption = "Ваш голос: " + inbox.voice.seconds + " с, " + ago(inbox.voice.age_s);
-    }
-    paintSlot("voice", !!caption, caption, "Записать через бота", "Записать заново");
-    showVideoState();
+    document.querySelectorAll("[data-drop]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        pickedVideo = null;
+        input.value = "";
+        showVideoState();
+      });
+    });
   }
 
   function showVideoState() {
-    var caption = "";
-    if (pickedVideo) caption = "Выбрано: " + pickedVideo.name;
-    else if (inbox.video) {
-      caption = "Ваше видео: " + inbox.video.seconds + " с, " + ago(inbox.video.age_s);
-    }
-    paintSlot("video", !!caption, caption, "Записать видео", "Записать заново");
+    var slot = document.getElementById("video-slot");
+    slot.hidden = !pickedVideo;
+    if (pickedVideo) slot.querySelector(".slot-text").textContent = "Выбрано: " + pickedVideo.name;
+    refreshGo();
   }
 
   // --- отправка -------------------------------------------------------------
@@ -341,41 +231,22 @@
     fd.append("text", document.getElementById(mode + "-text").value);
 
     if (mode === "photo") {
-      var photo = document.getElementById("photo-file").files[0];
-      if (!photo) { err.textContent = "Нужно фото."; return; }
-      fd.append("photo", photo);
+      fd.append("photo", document.getElementById("photo-file").files[0]);
       if (voice.mode === "preset") {
-        if (!voice.id) { err.textContent = "Выберите голос."; return; }
         fd.append("voice_id", voice.id);
-      } else if (voice.mode === "chat") {
-        if (pickedVoice) {
-          fd.append("voice", pickedVoice);
-        } else if (!inbox.voice) {
-          // Файл, присланный боту, лежит на сервере — сюда ничего не кладём,
-          // его подхватят там. А вот записанное в окне надо отдать явно.
-          err.textContent = "Записи голоса ещё нет. Нажмите «Записать здесь» "
-                          + "или запишите через бота.";
-          return;
-        }
       } else {
-        var vf = document.getElementById("voice-file").files[0];
-        if (!vf) { err.textContent = "Выберите файл с голосом."; return; }
-        fd.append("voice", vf);
+        fd.append("voice", document.getElementById("voice-file").files[0]);
       }
-    } else if (pickedVideo) {
+    } else {
       fd.append("video", pickedVideo);
-    } else if (!inbox.video) {
-      err.textContent = "Нужно видео: снимите на камеру, выберите файл "
-                      + "или отправьте ролик боту в чат.";
-      return;
     }
 
     var btn = document.querySelector('[data-submit="' + mode + '"]');
     btn.disabled = true;
     api("/api/avatar", { method: "POST", body: fd })
-      .then(function (job) { btn.disabled = false; resume(job); })
+      .then(function (job) { resume(job); })
       .catch(function (e) {
-        btn.disabled = false;
+        refreshGo();
         if (e.status === 409) { resume(e.data); return; }   // уже идёт — это прогресс
         err.textContent = e.message;
       });
@@ -453,37 +324,24 @@
       var where = b.getAttribute("data-go");
       if (where === "photo") setPhotoMode(b.getAttribute("data-mode"));
       show(where);
-      if (where === "video") refreshInbox();
+      refreshGo();
     });
   });
   document.querySelectorAll("[data-submit]").forEach(function (b) {
     b.addEventListener("click", function () { submit(b.getAttribute("data-submit")); });
   });
+  document.getElementById("photo-file").addEventListener("change", refreshGo);
   wireCounter("photo-text");
   wireCounter("video-text");
   wireVoice();
-  wireInboxButtons();
+  wireVideo();
+  refreshGo();
 
   api("/api/state").then(function (state) {
-    inbox = state.inbox || { voice: null, video: null };
-    armedScreen = false;
     // Кнопку рисуем, только если сервер сказал, что рисовать есть чем.
     // Без ключей Kandinsky режим отказал бы уже после нажатия.
     if (state.toon) document.getElementById("card-toon").hidden = false;
-    showInbox();
     if (state.job) { resume(state.job); return; }
-    if (startAt === "photo" || startAt === "toon" || startAt === "video") {
-      var where = startAt === "video" ? "video" : "photo";
-      if (where === "photo") setPhotoMode(startAt);
-      show(where);
-      if (where === "photo") {
-        // Человек вернулся из чата, куда уходил записывать голос, — открываем
-        // сразу ту вкладку, а не «готовые голоса».
-        var tab = document.querySelector('[data-voice-tab="chat"]');
-        if (tab) tab.click();
-      }
-      return;
-    }
     show("pick");
   }).catch(function (e) {
     // Разделяем случаи: мост MAX не загрузился, подписи в окне нет, подпись
