@@ -69,18 +69,34 @@ async def h3(tmp_path):
     await runner.cleanup()
 
 
-@pytest.fixture
-def media(tmp_path):
-    """Фото и голос, годные для подачи в модель."""
-    photo = tmp_path / "face.jpg"
-    voice = tmp_path / "voice.wav"
+@pytest.fixture(scope="session")
+def media(tmp_path_factory):
+    """Фото и голос, годные для подачи в модель.
+
+    Одни на весь прогон, а не на каждый тест. Файлы эти только читают и
+    копируют, менять их никто не пытается, — зато ffmpeg вызывается один
+    раз вместо девяти. Дело не в скорости: на машине с антивирусом каждый
+    его запуск это лотерея (ffprobe у нас уже падал с 0xC0000005), и
+    девять билетов вместо одного дают ровно то, что мы и увидели —
+    случайную красноту в случайном тесте.
+    """
+    folder = tmp_path_factory.mktemp("media")
+    photo = folder / "face.jpg"
+    voice = folder / "voice.wav"
     from PIL import Image
 
     Image.new("RGB", (800, 600), (30, 60, 120)).save(photo)
-    subprocess.run(
+    done = subprocess.run(
         ["ffmpeg", "-y", "-nostdin", "-v", "error", "-f", "lavfi",
-         "-i", "sine=f=220:d=6", "-ac", "1", "-ar", "44100", str(voice)], check=True,
+         "-i", "sine=f=220:d=6", "-ac", "1", "-ar", "44100", str(voice)],
+        capture_output=True, text=True,
     )
+    if done.returncode != 0 or not voice.is_file():
+        raise RuntimeError(
+            "ffmpeg не сделал тестовый звук. Если это Windows и сообщение "
+            "пустое — почти наверняка антивирус: добавьте C:\\Avatars\\tools\\ffmpeg "
+            "в исключения.\n" + (done.stderr or "").strip()
+        )
     return photo, voice
 
 
